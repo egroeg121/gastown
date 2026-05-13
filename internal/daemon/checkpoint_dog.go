@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/gastown/internal/constants"
+	gitpkg "github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/util"
 )
@@ -39,14 +40,9 @@ func checkpointDogInterval(config *DaemonPatrolConfig) time.Duration {
 	return defaultCheckpointDogInterval
 }
 
-// runtimeExcludeDirs are directories to unstage after git add -A.
+// runtimeExcludePathspecs are artifacts to unstage after git add -A.
 // These contain runtime/ephemeral data that should not be checkpointed.
-var runtimeExcludeDirs = []string{
-	".claude/",
-	".beads/",
-	".runtime/",
-	"__pycache__/",
-}
+var runtimeExcludePathspecs = gitpkg.RuntimeArtifactPathspecs
 
 // runCheckpointDog auto-commits WIP changes in active polecat worktrees.
 // This protects against data loss when sessions crash or hit context limits.
@@ -152,10 +148,10 @@ func (d *Daemon) checkpointWorktree(workDir, rigName, polecatName string) bool {
 		return false
 	}
 
-	// Unstage runtime/ephemeral directories
-	for _, dir := range runtimeExcludeDirs {
-		// git reset HEAD -- <dir> is safe even if dir doesn't exist (exits 0)
-		_, _ = runGitCmd(workDir, "reset", "HEAD", "--", dir)
+	// Unstage runtime/ephemeral artifacts.
+	for _, pathspec := range runtimeExcludePathspecs {
+		// git reset HEAD -- <pathspec> is safe even if it doesn't match (exits 0).
+		_, _ = runGitCmd(workDir, "reset", "HEAD", "--", pathspec)
 	}
 
 	// Unstage deletions of tracked files. A checkpoint should preserve work

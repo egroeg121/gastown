@@ -1820,6 +1820,16 @@ func TestIsGasTownRuntimePath(t *testing.T) {
 		{"__pycache__/", true},
 		{"__pycache__/foo.cpython-312.pyc", true},
 		{"src/__pycache__/bar.pyc", true},
+		{"node_modules/", true},
+		{"node_modules/pkg/index.js", true},
+		{"web/node_modules/pkg/index.js", true},
+		{".vitest/results.json", true},
+		{"web/.vitest/results.json", true},
+		{".vite/vitest/results.json", true},
+		{"beads.db", true},
+		{"data/beads.db", true},
+		{"data/beads.db-wal", true},
+		{"src/db.go", false},
 		{"src/main.go", false},
 		{"README.md", false},
 		{".gitignore", false},
@@ -1910,6 +1920,19 @@ func TestCleanExcludingRuntime(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "package manager and test caches untracked",
+			s: UncommittedWorkStatus{
+				HasUncommittedChanges: true,
+				UntrackedFiles: []string{
+					"node_modules/pkg/index.js",
+					"web/.vitest/results.json",
+					"cache/beads.db",
+					"cache/beads.db-wal",
+				},
+			},
+			want: true,
+		},
+		{
 			// CLAUDE.local.md is a Gas Town overlay file (gt-p35) that must not
 			// block gt done or be auto-committed.
 			name: "CLAUDE.local.md is runtime artifact",
@@ -1928,6 +1951,46 @@ func TestCleanExcludingRuntime(t *testing.T) {
 				t.Errorf("CleanExcludingRuntime() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRuntimeArtifactPathspecsUnstageArtifacts(t *testing.T) {
+	dir := initTestRepo(t)
+	g := NewGit(dir)
+
+	files := map[string]string{
+		"src/main.go":                   "package main\n",
+		"node_modules/pkg/index.js":     "module.exports = {}\n",
+		"web/.vitest/results.json":      "{}\n",
+		"web/.vite/vitest/results.json": "{}\n",
+		"__pycache__/foo.pyc":           "cache\n",
+		"data/beads.db":                 "db\n",
+		"data/beads.db-wal":             "wal\n",
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	if err := g.Add("-A"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if err := g.ResetFiles(RuntimeArtifactPathspecs...); err != nil {
+		t.Fatalf("reset runtime pathspecs: %v", err)
+	}
+
+	out, err := g.run("diff", "--cached", "--name-only")
+	if err != nil {
+		t.Fatalf("diff cached: %v", err)
+	}
+	got := strings.TrimSpace(out)
+	if got != "src/main.go" {
+		t.Fatalf("staged files = %q, want only src/main.go", got)
 	}
 }
 

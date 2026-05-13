@@ -2056,39 +2056,72 @@ func isBeadsPath(path string) bool {
 	return strings.Contains(path, ".beads/") || strings.Contains(path, ".beads\\")
 }
 
-// isGasTownRuntimePath returns true if the path is a Gas Town or Cursor runtime
-// artifact that should not block gt done. These paths are managed by the toolchain,
-// not by the developer, and are normally gitignored via EnsureGitignorePatterns.
+var runtimeArtifactDirNames = []string{
+	".beads",
+	".claude",
+	".runtime",
+	".logs",
+	"__pycache__",
+	"node_modules",
+	".vitest",
+	".vite",
+}
+
+// RuntimeArtifactPathspecs are pathspecs that should be unstaged after broad
+// safety-net git add operations. They protect polecat MRs from tool/runtime
+// artifacts while preserving real implementation changes.
+var RuntimeArtifactPathspecs = []string{
+	".beads/", ":(glob)**/.beads/**",
+	".claude/", ":(glob)**/.claude/**",
+	".runtime/", ":(glob)**/.runtime/**",
+	".logs/", ":(glob)**/.logs/**",
+	"__pycache__/", ":(glob)**/__pycache__/**",
+	"node_modules/", ":(glob)**/node_modules/**",
+	".vitest/", ":(glob)**/.vitest/**",
+	".vite/", ":(glob)**/.vite/**",
+	"*.db", ":(glob)**/*.db",
+	"*.db-*", ":(glob)**/*.db-*",
+}
+
+// isGasTownRuntimePath returns true if the path is a runtime artifact that
+// should not block gt done. These paths are managed by the toolchain, test
+// runners, package managers, or local databases rather than by the developer.
 func isGasTownRuntimePath(path string) bool {
-	prefixes := []string{
-		".beads/", ".beads\\",
-		".claude/", ".claude\\",
-		".runtime/", ".runtime\\",
-		".logs/", ".logs\\",
-		"__pycache__/", "__pycache__\\",
-	}
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(path, prefix) || strings.Contains(path, "/"+prefix) {
+	normalized := strings.ReplaceAll(path, "\\", "/")
+	for _, name := range runtimeArtifactDirNames {
+		prefix := name + "/"
+		if strings.HasPrefix(normalized, prefix) || strings.Contains(normalized, "/"+prefix) {
 			return true
 		}
 	}
-	// Also match bare directory entries from git status (e.g. ".claude/")
-	bare := strings.TrimSuffix(strings.TrimSuffix(path, "/"), "\\")
-	for _, name := range []string{".beads", ".claude", ".runtime", ".logs", "__pycache__"} {
-		if bare == name {
+	// Also match bare directory entries from git status (e.g. ".claude/").
+	bare := strings.TrimSuffix(normalized, "/")
+	base := bare
+	if idx := strings.LastIndex(base, "/"); idx >= 0 {
+		base = base[idx+1:]
+	}
+	for _, name := range runtimeArtifactDirNames {
+		if base == name {
 			return true
 		}
+	}
+	if isRuntimeDatabaseFile(base) {
+		return true
 	}
 	// CLAUDE.local.md is a Gas Town overlay file written by CreatePolecatCLAUDEmd.
 	// It must not be staged by the auto-commit safety net or committed to the repo.
-	if bare == "CLAUDE.local.md" {
+	if base == "CLAUDE.local.md" {
 		return true
 	}
 	return false
 }
 
-// CleanExcludingRuntime returns true if the only uncommitted changes are Gas Town
-// runtime artifacts (.beads/, .claude/, .runtime/, .logs/, __pycache__/).
+func isRuntimeDatabaseFile(base string) bool {
+	return strings.HasSuffix(base, ".db") || strings.Contains(base, ".db-")
+}
+
+// CleanExcludingRuntime returns true if the only uncommitted changes are runtime
+// artifacts covered by isGasTownRuntimePath.
 // Used by gt done to avoid blocking completion on toolchain-managed files.
 //
 // Note: UnpushedCommits and StashCount are intentionally NOT checked here. This
