@@ -1236,22 +1236,24 @@ After await-signal returns (either by signal or timeout):
 2. Build a step audit: for each step in this formula, record whether you
    executed it (OK) or skipped it (SKIP). This makes shortcutting visible
    in the ledger. Format: comma-separated step_id:STATUS pairs.
-3. Close current patrol and start next cycle:
+3. Close current patrol, start next cycle, and hand off to a fresh Deacon session:
 ```bash
 gt patrol report --summary "<brief summary>" \
   --steps "heartbeat:OK,inbox-check:OK,orphan-process-cleanup:SKIP,..."
 ```
 The --steps flag is REQUIRED. List ALL 26 steps with their actual status.
 Steps you executed get OK, steps you skipped get SKIP.
-This closes the current patrol wisp and automatically creates a new one.
-4. Continue executing from the first step of the new patrol cycle
+This closes the current patrol wisp, automatically creates a new one, then
+invokes `gt handoff -y` so the fresh Deacon session picks up the newly hooked
+patrol. Do not return to the prompt or wait for manual input after the report.
+4. Stop; handoff replaces this session and the successor starts from `gt prime --hook`.
 
 **If context HIGH** (approaching limit):
 1. Write handoff mail with notable observations:
 ```bash
-gt handoff -s "Deacon patrol handoff" -m "<observations>"
+gt handoff -y -s "Deacon patrol handoff" -m "<observations>"
 ```
 2. Exit cleanly - the daemon will respawn a fresh Deacon session
 
-**IMPORTANT**: You must either report and loop (context LOW) or exit (context HIGH).
+**IMPORTANT**: You must either report and hand off (context LOW) or hand off directly (context HIGH).
 Never leave the session idle without work on your hook."""

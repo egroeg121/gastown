@@ -236,3 +236,34 @@ func TestBuildStepAudit(t *testing.T) {
 		})
 	}
 }
+
+func TestDeaconPatrolHandoffCommand(t *testing.T) {
+	cmd := deaconPatrolHandoffCommand("hq-wisp-abc", "All clear")
+
+	wantArgs := []string{
+		"gt",
+		"handoff",
+		"-y",
+		"--no-git-check",
+		"--reason",
+		"patrol-cycle",
+		"-s",
+		"Deacon patrol cycle complete",
+		"-m",
+	}
+	if len(cmd.Args) != len(wantArgs)+1 {
+		t.Fatalf("handoff args length = %d, want %d: %#v", len(cmd.Args), len(wantArgs)+1, cmd.Args)
+	}
+	for i, want := range wantArgs {
+		if cmd.Args[i] != want {
+			t.Fatalf("handoff arg %d = %q, want %q; args=%#v", i, cmd.Args[i], want, cmd.Args)
+		}
+	}
+
+	message := cmd.Args[len(cmd.Args)-1]
+	for _, want := range []string{"hq-wisp-abc", "All clear", "gt prime --hook"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("handoff message %q missing %q", message, want)
+		}
+	}
+}

@@ -306,3 +306,32 @@ func TestDeaconPatrolHasHeartbeatSteps(t *testing.T) {
 		t.Error("deacon patrol formula must refresh heartbeat again before await-signal")
 	}
 }
+
+func TestDeaconPatrolReportsThenHandsOff(t *testing.T) {
+	content, err := formulasFS.ReadFile("formulas/mol-deacon-patrol.formula.toml")
+	if err != nil {
+		t.Fatalf("reading deacon patrol formula: %v", err)
+	}
+
+	f, err := Parse(content)
+	if err != nil {
+		t.Fatalf("parsing deacon patrol formula: %v", err)
+	}
+
+	var loopDesc string
+	for _, step := range f.Steps {
+		if step.ID == "loop-or-exit" {
+			loopDesc = step.Description
+			break
+		}
+	}
+	if loopDesc == "" {
+		t.Fatal("deacon patrol formula missing loop-or-exit step")
+	}
+
+	for _, want := range []string{"gt patrol report", "gt handoff -y", "Do not return to the prompt"} {
+		if !strings.Contains(loopDesc, want) {
+			t.Fatalf("loop-or-exit step missing %q", want)
+		}
+	}
+}

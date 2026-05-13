@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -26,6 +27,7 @@ then automatically start a new patrol cycle.
 This replaces the old squash+new pattern with a single command that:
   1. Closes the current patrol root wisp with the summary
   2. Creates a new patrol wisp for the next cycle
+  3. For Deacon patrols, hands off to a fresh session after the new wisp is hooked
 
 The summary is stored on the patrol root wisp for audit purposes.
 The --steps flag records which patrol steps were executed vs skipped,
@@ -134,6 +136,27 @@ func runPatrolReport(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("%s Started new patrol: %s\n", style.Success.Render("✓"), newPatrolID)
+	if cfg.RoleName == "deacon" {
+		if err := runDeaconPatrolHandoff(newPatrolID, patrolReportSummary); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var deaconPatrolHandoffCommand = func(newPatrolID, summary string) *exec.Cmd {
+	message := fmt.Sprintf("Completed patrol cycle and created next patrol %s.\n\nSummary: %s\n\nFresh session should run `gt prime --hook` and continue patrol.", newPatrolID, summary)
+	return exec.Command("gt", "handoff", "-y", "--no-git-check", "--reason", "patrol-cycle", "-s", "Deacon patrol cycle complete", "-m", message)
+}
+
+func runDeaconPatrolHandoff(newPatrolID, summary string) error {
+	cmd := deaconPatrolHandoffCommand(newPatrolID, summary)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("handing off deacon after patrol report: %w", err)
+	}
 	return nil
 }
 
