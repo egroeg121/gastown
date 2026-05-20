@@ -1028,6 +1028,86 @@ func TestEnsureBeadsRedirect_RepairsExistingRedirectChain(t *testing.T) {
 	}
 }
 
+func TestEnsurePrimeServerModeBeadsConfigs_DisablesAutoExportForTownAndCurrentRig(t *testing.T) {
+	townRoot := t.TempDir()
+	townBeadsDir := filepath.Join(townRoot, ".beads")
+	rigRoot := filepath.Join(townRoot, "gastown")
+	rigBeadsDir := filepath.Join(rigRoot, "mayor", "rig", ".beads")
+	workDir := filepath.Join(rigRoot, "polecats", "nitro", "gastown")
+	workBeadsDir := filepath.Join(workDir, ".beads")
+
+	for _, dir := range []string{townBeadsDir, rigBeadsDir, workBeadsDir, filepath.Join(townRoot, "mayor")} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(townRoot, "mayor", "rigs.json"), []byte(`{"version":1,"rigs":{"gastown":{"beads":{"prefix":"gt"}}}}`), 0644); err != nil {
+		t.Fatalf("write rigs.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(townBeadsDir, "metadata.json"), []byte(`{"dolt_mode":"server","dolt_database":"hq"}`), 0644); err != nil {
+		t.Fatalf("write town metadata: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(townBeadsDir, "config.yaml"), []byte("prefix: hq\nissue-prefix: hq\n"), 0644); err != nil {
+		t.Fatalf("write town config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rigBeadsDir, "metadata.json"), []byte(`{"dolt_mode":"server","dolt_database":"gastown"}`), 0644); err != nil {
+		t.Fatalf("write rig metadata: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rigBeadsDir, "config.yaml"), []byte("prefix: \nissue-prefix: \n"), 0644); err != nil {
+		t.Fatalf("write rig config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workBeadsDir, "redirect"), []byte("../../../mayor/rig/.beads\n"), 0644); err != nil {
+		t.Fatalf("write redirect: %v", err)
+	}
+
+	ensurePrimeServerModeBeadsConfigs(townRoot, workDir, RoleInfo{Role: RolePolecat, Rig: "gastown", Polecat: "nitro"})
+
+	townConfig, err := os.ReadFile(filepath.Join(townBeadsDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("read town config: %v", err)
+	}
+	for _, want := range []string{"prefix: hq\n", "issue-prefix: hq\n", "export.auto: \"false\"\n"} {
+		if !strings.Contains(string(townConfig), want) {
+			t.Fatalf("town config missing %q:\n%s", want, string(townConfig))
+		}
+	}
+
+	rigConfig, err := os.ReadFile(filepath.Join(rigBeadsDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("read rig config: %v", err)
+	}
+	for _, want := range []string{"prefix: gt\n", "issue-prefix: gt\n", "export.auto: \"false\"\n"} {
+		if !strings.Contains(string(rigConfig), want) {
+			t.Fatalf("rig config missing %q:\n%s", want, string(rigConfig))
+		}
+	}
+}
+
+func TestEnsurePrimeServerModeBeadsConfigs_SkipsNonServerMode(t *testing.T) {
+	townRoot := t.TempDir()
+	beadsDir := filepath.Join(townRoot, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatalf("mkdir beads dir: %v", err)
+	}
+	original := "prefix: hq\nissue-prefix: hq\nexport.auto: true\n"
+	if err := os.WriteFile(filepath.Join(beadsDir, "metadata.json"), []byte(`{"dolt_mode":"local","dolt_database":"hq"}`), 0644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(beadsDir, "config.yaml"), []byte(original), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	ensurePrimeServerModeBeadsConfigs(townRoot, townRoot, RoleInfo{Role: RoleMayor})
+
+	after, err := os.ReadFile(filepath.Join(beadsDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if string(after) != original {
+		t.Fatalf("non-server config changed unexpectedly:\n%s", string(after))
+	}
+}
+
 // TestOutputRalphLoopDirective_NoSlashCommand verifies that ralph mode emits
 // inline iterative work instructions instead of referencing a nonexistent
 // /ralph-loop slash command. This is the regression test for the ralph-loop

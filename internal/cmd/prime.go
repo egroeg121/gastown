@@ -169,6 +169,10 @@ func runPrime(cmd *cobra.Command, args []string) (retErr error) {
 		return nil
 	}
 
+	if !primeDryRun {
+		ensurePrimeServerModeBeadsConfigs(townRoot, cwd, roleInfo)
+	}
+
 	// Compact/resume: fast path that skips setupPrimeSession and the
 	// retry-heavy findAgentWork. The agent already has role context and
 	// work state in compressed memory — just confirm identity and inject
@@ -356,6 +360,59 @@ func handlePrimeHookMode(townRoot, cwd string) {
 	for _, line := range hookSessionBeaconLines(sessionID, source) {
 		fmt.Println(line)
 	}
+}
+
+func ensurePrimeServerModeBeadsConfigs(townRoot, cwd string, roleInfo RoleInfo) {
+	targets := map[string]string{}
+
+	townBeadsDir := filepath.Join(townRoot, ".beads")
+	targets[townBeadsDir] = beads.ConfigDefaultsFromMetadata(townBeadsDir, "hq")
+
+	workBeadsDir := beads.ResolveBeadsDir(cwd)
+	if workBeadsDir != "" {
+		targets[workBeadsDir] = primeRigBeadsPrefix(townRoot, cwd, roleInfo, workBeadsDir)
+	}
+
+	for beadsDir, prefix := range targets {
+		if !primeBeadsDirUsesServerMode(beadsDir) {
+			continue
+		}
+		if err := beads.EnsureConfigYAML(beadsDir, prefix); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: prime could not repair server-mode beads config %s: %v\n", filepath.Join(beadsDir, "config.yaml"), err)
+		}
+	}
+}
+
+func primeRigBeadsPrefix(townRoot, cwd string, roleInfo RoleInfo, beadsDir string) string {
+	rigName := strings.TrimSpace(roleInfo.Rig)
+	if rigName == "" {
+		if absCWD, err := filepath.Abs(cwd); err == nil {
+			rigName = detectRigFromPath(townRoot, absCWD)
+		}
+	}
+	if rigName != "" {
+		rigsConfig, err := config.LoadRigsConfig(filepath.Join(townRoot, "mayor", "rigs.json"))
+		if err == nil {
+			if entry, ok := rigsConfig.Rigs[rigName]; ok && entry.BeadsConfig != nil && strings.TrimSpace(entry.BeadsConfig.Prefix) != "" {
+				return strings.TrimSuffix(strings.TrimSpace(entry.BeadsConfig.Prefix), "-")
+			}
+		}
+	}
+	return beads.ConfigDefaultsFromMetadata(beadsDir, "hq")
+}
+
+func primeBeadsDirUsesServerMode(beadsDir string) bool {
+	data, err := os.ReadFile(filepath.Join(beadsDir, "metadata.json"))
+	if err != nil {
+		return false
+	}
+	var metadata struct {
+		DoltMode string `json:"dolt_mode"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return false
+	}
+	return metadata.DoltMode == "server"
 }
 
 // hookSessionBeaconLines returns the bracketed session/source markers used by
