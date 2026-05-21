@@ -42,8 +42,9 @@ var tapGuardPRWorkflowCmd = &cobra.Command{
 	Long: `Enforce PR workflow operations in Gas Town.
 
 Gas Town supports both internal merge-queue work and fork-PR sweep work.
-This guard blocks ad-hoc PR/branch operations only when no fork/upstream
-workflow is configured.
+This guard uses fork/upstream remote topology only as a narrow prerequisite
+for allowing PR/branch commands; formula, role, and pre-push policy still
+decide where work may land.
 
 This guard blocks:
   - gh pr create
@@ -51,11 +52,11 @@ This guard blocks:
   - git switch -c (feature branches)
 
 Exit codes:
-  0 - Operation allowed (fork/upstream workflow configured, or not an agent)
-  2 - Operation BLOCKED (agent context without configured PR workflow)
+  0 - Operation allowed (fork/upstream prerequisite present, or not an agent)
+  2 - Operation BLOCKED (agent context without fork/upstream prerequisite)
 
-Humans and agents with a fork/upstream remote can use PRs. Direct pushes
-to main are controlled by the git pre-push hook.`,
+Humans and agents with a fork/upstream remote can run PR commands. Direct
+pushes to the default branch are controlled by the git pre-push hook.`,
 	RunE: runTapGuardPRWorkflow,
 }
 
@@ -65,7 +66,7 @@ func init() {
 }
 
 func runTapGuardPRWorkflow(cmd *cobra.Command, args []string) error {
-	if hasForkPRWorkflow() {
+	if hasForkPRPrerequisite() {
 		return nil
 	}
 
@@ -73,14 +74,14 @@ func runTapGuardPRWorkflow(cmd *cobra.Command, args []string) error {
 	if isGasTownAgentContext() {
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "╔══════════════════════════════════════════════════════════════════╗")
-		fmt.Fprintln(os.Stderr, "║  ❌ PR WORKFLOW NOT CONFIGURED                                   ║")
+		fmt.Fprintln(os.Stderr, "║  ❌ PR WORKFLOW PREREQUISITE MISSING                             ║")
 		fmt.Fprintln(os.Stderr, "╠══════════════════════════════════════════════════════════════════╣")
 		fmt.Fprintln(os.Stderr, "║  No fork/upstream remote is configured for PR workflow.         ║")
 		fmt.Fprintln(os.Stderr, "║                                                                  ║")
 		fmt.Fprintln(os.Stderr, "║  Instead of:  gh pr create / git checkout -b / git switch -c    ║")
 		fmt.Fprintln(os.Stderr, "║  Do this:     use gt done or configure a fork/upstream remote   ║")
 		fmt.Fprintln(os.Stderr, "║                                                                  ║")
-		fmt.Fprintln(os.Stderr, "║  Direct pushes to main are blocked separately by pre-push.      ║")
+		fmt.Fprintln(os.Stderr, "║  Default-branch pushes are blocked separately by pre-push.      ║")
 		fmt.Fprintln(os.Stderr, "╚══════════════════════════════════════════════════════════════════╝")
 		fmt.Fprintln(os.Stderr, "")
 		return NewSilentExit(2) // Exit 2 = BLOCK in Claude Code hooks
@@ -90,7 +91,7 @@ func runTapGuardPRWorkflow(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func hasForkPRWorkflow() bool {
+func hasForkPRPrerequisite() bool {
 	if remoteExists("fork") || remoteExists("upstream") {
 		return true
 	}

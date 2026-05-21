@@ -2,7 +2,9 @@ name: Block Internal PRs
 
 on:
   pull_request:
-    types: [opened, reopened]
+    # Re-run on edited so retargeting an internal PR to the default branch is
+    # blocked even if the PR originally targeted an integration branch.
+    types: [opened, reopened, edited, synchronize]
 
 permissions: {}
 
