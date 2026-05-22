@@ -1181,17 +1181,25 @@ func runPolecatCheckRecovery(cmd *cobra.Command, args []string) error {
 			status.ActiveMR = mr.ID
 			activeMRBlocks = true
 		}
+		loadGitState()
+		if blocker := recoveryGitStateBlocker(p.ClonePath, gitState, gitErr); blocker != "" {
+			status.Blockers = append(status.Blockers, blocker)
+		}
 		if len(status.Blockers) > 0 {
 			status.applyDisposition(dispositionForRecoveryBlockers(status.Blockers))
 		} else {
 			resolved := polecat.ResolveWorkstateDisposition(polecat.WorkstateInput{
-				State:          polecat.StateIdle,
-				HookBead:       hookBead,
-				CleanupStatus:  effectiveCleanupStatus,
-				ActiveMR:       status.ActiveMR,
-				ActiveMRBlocks: activeMRBlocks,
-				PushFailed:     fields.PushFailed,
-				MRFailed:       fields.MRFailed,
+				State:           polecat.StateIdle,
+				HookBead:        hookBead,
+				CleanupStatus:   effectiveCleanupStatus,
+				ActiveMR:        status.ActiveMR,
+				ActiveMRBlocks:  activeMRBlocks,
+				PushFailed:      fields.PushFailed,
+				MRFailed:        fields.MRFailed,
+				GitDirty:        gitStateHasUncommittedFiles(gitState),
+				StashCount:      stashCountForRecovery(gitState),
+				UnpushedCommits: 0,
+				GitCheckFailed:  gitErr != nil,
 			})
 			status.applyDisposition(resolved.Disposition)
 		}
@@ -1339,16 +1347,41 @@ func recoveryGitStateBlocker(worktreePath string, gitState *GitState, gitErr err
 	if gitErr != nil {
 		return fmt.Sprintf("git_state=unknown path=%s: %v", worktreePath, gitErr)
 	}
-	if gitState == nil || gitState.Clean {
+	if gitState == nil {
 		return ""
-	}
-	if gitState.UnpushedCommits > 0 {
-		return fmt.Sprintf("git_state=has_unpushed unpushed_commits=%d", gitState.UnpushedCommits)
 	}
 	if gitState.StashCount > 0 {
 		return fmt.Sprintf("git_state=has_stash stash_count=%d", gitState.StashCount)
 	}
+	if len(gitState.UncommittedFiles) == 0 {
+		worktreeGit := git.NewGit(worktreePath)
+		branch, err := worktreeGit.CurrentBranch()
+		if err != nil {
+			return fmt.Sprintf("git_state=unknown path=%s: %v", worktreePath, err)
+		}
+		if branch != "" {
+			pushed, unpushed, err := worktreeGit.BranchPushedToRemote(branch, "origin")
+			if err != nil {
+				return fmt.Sprintf("git_state=unknown path=%s: %v", worktreePath, err)
+			}
+			if !pushed && unpushed > 0 {
+				return fmt.Sprintf("git_state=has_unpushed unpushed_commits=%d", unpushed)
+			}
+		}
+		return ""
+	}
 	return fmt.Sprintf("git_state=has_uncommitted uncommitted_files=%d", len(gitState.UncommittedFiles))
+}
+
+func stashCountForRecovery(gitState *GitState) int {
+	if gitState == nil {
+		return 0
+	}
+	return gitState.StashCount
+}
+
+func gitStateHasUncommittedFiles(gitState *GitState) bool {
+	return gitState != nil && len(gitState.UncommittedFiles) > 0
 }
 
 func activeMRBlocker(bd issueShower, mrID string) string {
@@ -1621,7 +1654,7 @@ func runPolecatNuke(cmd *cobra.Command, args []string) error {
 			fmt.Printf("Nuking %s/%s...\n", p.rigName, p.polecatName)
 		}
 
-		if err := nukePolecatFull(p.polecatName, p.rigName, p.mgr, p.r); err != nil {
+		if err := nukePolecatFull(p.polecatName, p.rigName, p.mgr, p.r, polecatNukeForce); err != nil {
 			nukeErrors = append(nukeErrors, fmt.Sprintf("%s/%s: %v", p.rigName, p.polecatName, err))
 			continue
 		}
@@ -1665,7 +1698,13 @@ func runPolecatNuke(cmd *cobra.Command, args []string) error {
 // 3. Delete git branch
 // 4. Close agent bead
 // This is the canonical cleanup path used by both `polecat nuke` and `polecat stale --cleanup`.
-func nukePolecatFull(polecatName, rigName string, mgr *polecat.Manager, r *rig.Rig) error {
+func nukePolecatFull(polecatName, rigName string, mgr *polecat.Manager, r *rig.Rig, allowUnsafe bool) error {
+	if !allowUnsafe {
+		if err := mgr.CheckDestructiveActionLease(polecatName, false); err != nil {
+			return fmt.Errorf("destructive safety recheck failed: %w", err)
+		}
+	}
+
 	t := tmux.NewTmux()
 
 	// Step 1: Kill tmux session unconditionally to prevent ghost sessions
@@ -1723,8 +1762,9 @@ func nukePolecatFull(polecatName, rigName string, mgr *polecat.Manager, r *rig.R
 		}
 	}
 
-	// Step 3: Delete worktree (nuclear=true to bypass safety checks for stale polecats)
-	if err := mgr.RemoveWithOptions(polecatName, true, true, false); err != nil {
+	// Step 3: Delete worktree. Normal nuke rechecks current git/MR state under
+	// the polecat lock; --force is the explicit unsafe override.
+	if err := mgr.RemoveWithOptions(polecatName, allowUnsafe, allowUnsafe, false); err != nil {
 		if errors.Is(err, polecat.ErrPolecatNotFound) {
 			fmt.Printf("  %s worktree already gone\n", style.Dim.Render("○"))
 		} else {
@@ -1968,7 +2008,7 @@ func runPolecatStale(cmd *cobra.Command, args []string) error {
 					continue
 				}
 				fmt.Printf("Nuking %s...\n", info.Name)
-				if err := nukePolecatFull(info.Name, rigName, mgr, r); err != nil {
+				if err := nukePolecatFull(info.Name, rigName, mgr, r, false); err != nil {
 					fmt.Printf("  %s (%v)\n", style.Error.Render("failed"), err)
 				} else {
 					nuked++
