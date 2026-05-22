@@ -39,7 +39,14 @@ func TestCreateBatchConvoy_CreatesOneConvoyTrackingAllBeads(t *testing.T) {
 
 	// Stub bd: log all commands. create and dep add succeed.
 	bdScript := `#!/bin/sh
-	echo "CMD:$*|BEADS_DIR:${BEADS_DIR:-}" >> "` + logPath + `"
+log_args=""
+for arg in "$@"; do
+  case "$arg" in
+    --description=*) arg="--description=<redacted>" ;;
+  esac
+  log_args="${log_args}${log_args:+ }${arg}"
+done
+echo "CMD:${log_args}|BEADS_DIR:${BEADS_DIR:-}" >> "` + logPath + `"
 cmd="$1"
 if [ "$cmd" = "--allow-stale" ]; then
   shift || true
