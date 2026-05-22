@@ -1205,9 +1205,10 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 			// Dolt branch (containing the MR bead) is merged.
 		}
 
+	afterMR:
 		// Update agent bead with active_mr reference (for traceability). This must
-		// also run for idempotent existing-MR submissions so reused polecats retain
-		// the durable MR owner after a retry.
+		// also run for idempotent existing-MR submissions and checkpoint resumes so
+		// reused polecats retain the durable MR owner after a retry.
 		if agentBeadID != "" && mrID != "" {
 			if err := bd.ForAgentBead().UpdateAgentActiveMR(agentBeadID, mrID); err != nil {
 				style.PrintWarning("could not update agent bead with active_mr: %v", err)
@@ -1221,7 +1222,6 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 			writeDoneCheckpoint(cpBd, agentBeadID, CheckpointMRCreated, mrID)
 		}
 
-	afterMR:
 		sourceTransition = beads.SourceTransitionDoneSubmittedMR
 		fmt.Printf("  Source: %s\n", branch)
 		fmt.Printf("  Target: %s\n", target)
