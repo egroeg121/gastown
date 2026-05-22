@@ -1588,9 +1588,9 @@ func (r *Router) GetMailbox(address string) (*Mailbox, error) {
 //     the next turn boundary.
 //  3. For the overseer (human operator), always use a visible banner.
 //
-// After a successful notification, a deferred reply-reminder nudge is also
-// enqueued (after a configurable delay, default 30s) to prompt the recipient
-// to reply via gt mail send rather than in chat.
+// After a successful reply-actionable notification, a deferred reply-reminder
+// nudge is also enqueued (after a configurable delay, default 30s) to prompt
+// the recipient to reply via gt mail send rather than in chat.
 //
 // Supports mayor/, deacon/, rig/crew/name, rig/polecats/name, and rig/name addresses.
 // Respects agent DND/muted state - skips notification if recipient has DND enabled.
@@ -1726,19 +1726,35 @@ func prioritySeverityLabel(priority Priority) string {
 	}
 }
 
+// ShouldEnqueueReplyReminder is the central policy for deciding whether mail
+// should schedule a deferred reminder to reply. Only work-like mail is
+// reply-actionable; informational notifications and escalation ack flows should
+// stay visible without creating follow-up reply pressure.
+func ShouldEnqueueReplyReminder(msg *Message) bool {
+	if msg == nil {
+		return false
+	}
+	switch msg.Type {
+	case TypeTask, TypeScavenge:
+		return true
+	default:
+		return false
+	}
+}
+
 // enqueueReplyReminder queues a deferred nudge reminding the recipient to reply
 // via gt mail send rather than in chat. Best-effort: errors are logged, not returned.
 //
 // Skipped when:
 //   - No town root (can't use nudge queue)
-//   - Message type is TypeReply (recipient is already replying)
+//   - Message is not reply-actionable per ShouldEnqueueReplyReminder
 //   - Configured delay is zero or negative (feature disabled)
 func (r *Router) enqueueReplyReminder(msg *Message, sessionID string) {
 	if r.townRoot == "" {
 		return
 	}
-	if msg.Type == TypeReply {
-		return // Already a reply — reminder would be redundant
+	if !ShouldEnqueueReplyReminder(msg) {
+		return
 	}
 	delay := config.LoadOperationalConfig(r.townRoot).GetMailConfig().ReplyReminderDelayD()
 	if delay <= 0 {

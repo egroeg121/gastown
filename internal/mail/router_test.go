@@ -1643,6 +1643,7 @@ func TestNotifyRecipient_IdleAgent(t *testing.T) {
 		From:    "gastown/crew/sender",
 		To:      "gastown/crew/idletest",
 		Subject: "test idle delivery",
+		Type:    TypeTask,
 	}
 
 	err := r.notifyRecipient(msg)
@@ -1689,6 +1690,7 @@ func TestNotifyRecipient_BusyAgent(t *testing.T) {
 		From:    "gastown/crew/sender",
 		To:      "gastown/crew/busytest",
 		Subject: "test busy delivery",
+		Type:    TypeTask,
 	}
 
 	err := r.notifyRecipient(msg)
@@ -1766,8 +1768,8 @@ func TestNotifyRecipient_BusyAgentEscalationUsesUrgentQueuedNudge(t *testing.T) 
 	}
 
 	remaining, _ := nudge.Pending(townRoot, sessionName)
-	if remaining != 1 {
-		t.Fatalf("expected 1 deferred reply-reminder after draining escalation nudge, got %d", remaining)
+	if remaining != 0 {
+		t.Fatalf("expected no deferred reply-reminder for escalation mail, got %d", remaining)
 	}
 }
 
@@ -1810,6 +1812,29 @@ func containsLabel(labels []string, want string) bool {
 
 // --- enqueueReplyReminder tests ---
 
+func TestShouldEnqueueReplyReminder(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  *Message
+		want bool
+	}{
+		{"nil", nil, false},
+		{"task", &Message{Type: TypeTask}, true},
+		{"scavenge", &Message{Type: TypeScavenge}, true},
+		{"notification", &Message{Type: TypeNotification}, false},
+		{"escalation", &Message{Type: TypeEscalation}, false},
+		{"reply", &Message{Type: TypeReply}, false},
+		{"unset", &Message{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ShouldEnqueueReplyReminder(tt.msg); got != tt.want {
+				t.Fatalf("ShouldEnqueueReplyReminder() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestEnqueueReplyReminder_Basic verifies that a deferred reply-reminder nudge is
 // enqueued with the correct sender, message content, and DeliverAfter timestamp.
 func TestEnqueueReplyReminder_Basic(t *testing.T) {
@@ -1822,7 +1847,7 @@ func TestEnqueueReplyReminder_Basic(t *testing.T) {
 		From:    "gastown/witness",
 		To:      "gastown/crew/alice",
 		Subject: "status check",
-		Type:    TypeNotification,
+		Type:    TypeTask,
 	}
 	sessionID := "gt-gastown-crew-alice"
 
@@ -1883,6 +1908,23 @@ func TestEnqueueReplyReminder_Basic(t *testing.T) {
 	}
 	if q.ThreadID != msg.ThreadID {
 		t.Errorf("ThreadID = %q, want %q", q.ThreadID, msg.ThreadID)
+	}
+}
+
+func TestEnqueueReplyReminder_SkipsGenericNotification(t *testing.T) {
+	townRoot := t.TempDir()
+	r := &Router{workDir: t.TempDir(), townRoot: townRoot}
+	msg := &Message{
+		From:    "gastown/witness",
+		To:      "gastown/crew/alice",
+		Subject: "status update",
+		Type:    TypeNotification,
+	}
+	r.enqueueReplyReminder(msg, "gt-gastown-crew-alice")
+
+	pending, _ := nudge.Pending(townRoot, "gt-gastown-crew-alice")
+	if pending != 0 {
+		t.Errorf("TypeNotification should not enqueue a reminder, got %d", pending)
 	}
 }
 
