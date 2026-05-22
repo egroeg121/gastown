@@ -561,6 +561,10 @@ func (m *Manager) FindMRIncludingClosed(idOrBranch string) (*MergeRequest, error
 	}
 
 	for _, issue := range issues {
+		fields := beads.ParseMRFields(issue)
+		if fields != nil && fields.Rig != "" && !strings.EqualFold(fields.Rig, m.rig.Name) {
+			continue
+		}
 		mr := m.issueToMR(issue)
 		if mr == nil {
 			continue
