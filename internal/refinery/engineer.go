@@ -785,6 +785,26 @@ func (e *Engineer) doMergePR(ctx context.Context, branch, target string) Process
 	}
 	_, _ = fmt.Fprintf(e.output, "[Engineer] Found PR #%d for branch %s\n", prNumber, branch)
 
+	// Step PR.1.5: Ensure the external PR will land on the MR target branch.
+	// GitHub defaults PRs to the repository default branch when --base is omitted;
+	// without this check the PR merge API could merge work to main while the MR
+	// target says integration/feature.
+	prBase, err := e.prProvider.PRBaseBranch(prNumber)
+	if err != nil {
+		return ProcessResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to check PR #%d base branch: %v", prNumber, err),
+		}
+	}
+	prBase = strings.TrimSpace(prBase)
+	if prBase != target {
+		return ProcessResult{
+			Success: false,
+			Error:   fmt.Sprintf("PR #%d base %q does not match MR target %q", prNumber, prBase, target),
+		}
+	}
+	_, _ = fmt.Fprintf(e.output, "[Engineer] PR #%d base matches target: %s\n", prNumber, target)
+
 	// Step PR.2: Check approval status if require_review is enabled
 	requireReview := e.config.RequireReview != nil && *e.config.RequireReview
 	if requireReview {
