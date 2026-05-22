@@ -550,7 +550,7 @@ func (b *Beads) runMutation(args ...string) (_ []byte, retErr error) {
 	}()
 
 	beadsDir := b.getResolvedBeadsDir()
-	runEnv := append(BuildMutationPinnedBDEnv(os.Environ(), beadsDir), "BEADS_DIR="+beadsDir)
+	runEnv := append(b.buildMutationRunEnv(beadsDir), "BEADS_DIR="+beadsDir)
 	fullArgs := MaybePrependAllowStaleWithEnv(runEnv, args)
 
 	ctx, cancel := context.WithTimeout(context.Background(), resolveBdSubprocessTimeout())
@@ -570,6 +570,18 @@ func (b *Beads) runMutation(args ...string) (_ []byte, retErr error) {
 		return nil, b.wrapError(fmt.Errorf("command produced no output"), stderr.String(), args)
 	}
 	return stripStdoutWarnings(stdout.Bytes()), nil
+}
+
+func (b *Beads) buildMutationRunEnv(beadsDir string) []string {
+	if b.isolated {
+		env := filterBeadsEnv(os.Environ())
+		if b.serverPort > 0 {
+			env = append(env, fmt.Sprintf("GT_DOLT_PORT=%d", b.serverPort))
+			env = append(env, fmt.Sprintf("BEADS_DOLT_PORT=%d", b.serverPort))
+		}
+		return forceBDMutation(SuppressBDSideEffects(env))
+	}
+	return BuildMutationPinnedBDEnv(os.Environ(), beadsDir)
 }
 
 // runWithStdin executes a bd command, optionally piping stdinData to bd's stdin.
