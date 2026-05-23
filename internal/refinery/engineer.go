@@ -1251,7 +1251,10 @@ func (e *Engineer) HandleMRInfoSuccess(mr *MRInfo, result ProcessResult) {
 		// be closed via gh pr merge (showing "merged"), not via branch deletion
 		// (which shows "closed" and destroys the PR audit trail).
 		if isPolecat {
-			if e.git.HasOpenPR(mr.Branch) {
+			openPR, openPRErr := e.git.OpenPRExists(mr.Branch)
+			if openPRErr != nil {
+				_, _ = fmt.Fprintf(e.output, "[Engineer] Skipping remote branch delete for %s: could not verify PR state: %v\n", mr.Branch, openPRErr)
+			} else if openPR {
 				_, _ = fmt.Fprintf(e.output, "[Engineer] Skipping remote branch delete for %s: open PR exists (gas-fk4)\n", mr.Branch)
 			} else if err := e.git.DeleteRemoteBranch("origin", mr.Branch); err != nil {
 				_, _ = fmt.Fprintf(e.output, "[Engineer] Warning: failed to delete remote branch %s: %v\n", mr.Branch, err)

@@ -317,7 +317,12 @@ func runMqSubmit(cmd *cobra.Command, args []string) error {
 					oldFields := beads.ParseMRFields(old)
 					if oldFields != nil && strings.HasPrefix(oldFields.Branch, "polecat/") {
 						g := git.NewGit(cwd)
-						if err := g.DeleteRemoteBranch("origin", oldFields.Branch); err != nil {
+						openPR, openPRErr := g.OpenPRExists(oldFields.Branch)
+						if openPRErr != nil {
+							style.PrintWarning("could not verify PR state for superseded branch %s; skipping delete: %v", oldFields.Branch, openPRErr)
+						} else if openPR {
+							fmt.Printf("  %s Skipped remote branch delete for %s: open PR exists\n", style.Dim.Render("○"), oldFields.Branch)
+						} else if err := g.DeleteRemoteBranch("origin", oldFields.Branch); err != nil {
 							style.PrintWarning("could not delete superseded branch %s: %v", oldFields.Branch, err)
 						} else {
 							fmt.Printf("  %s Deleted remote branch: %s\n", style.Dim.Render("○"), oldFields.Branch)

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -2554,5 +2555,62 @@ func TestBranchPushedToRemote_NoPushURL(t *testing.T) {
 	}
 	if unpushed < 1 {
 		t.Errorf("BranchPushedToRemote unpushed = %d, want >= 1", unpushed)
+	}
+}
+
+func TestOpenPRExistsFailsClosedOnGHError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script gh stub is Unix-only")
+	}
+
+	binDir := t.TempDir()
+	ghPath := filepath.Join(binDir, "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\nexit 2\n"), 0755); err != nil {
+		t.Fatalf("write gh stub: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	g := NewGit(t.TempDir())
+	if _, err := g.OpenPRExists("polecat/test"); err == nil {
+		t.Fatal("OpenPRExists should return an error when gh fails")
+	}
+	if !g.HasOpenPR("polecat/test") {
+		t.Fatal("HasOpenPR must fail closed on gh errors")
+	}
+}
+
+func TestOpenPRExistsParsesGHOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script gh stub is Unix-only")
+	}
+
+	tests := []struct {
+		name string
+		json string
+		want bool
+	}{
+		{name: "no PR", json: "[]", want: false},
+		{name: "open PR", json: `[{"number":123}]`, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			ghPath := filepath.Join(binDir, "gh")
+			stub := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' '%s'\n", tt.json)
+			if err := os.WriteFile(ghPath, []byte(stub), 0755); err != nil {
+				t.Fatalf("write gh stub: %v", err)
+			}
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			g := NewGit(t.TempDir())
+			got, err := g.OpenPRExists("polecat/test")
+			if err != nil {
+				t.Fatalf("OpenPRExists: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("OpenPRExists = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

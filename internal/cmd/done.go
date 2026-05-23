@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -85,6 +84,14 @@ func doneContaminationBaseRef(defaultBranch, explicitTarget string) string {
 	}
 
 	return "origin/" + targetBranch
+}
+
+func shouldBlockReviewOnlySubmission(fields *beads.AttachmentFields, aheadCount int) bool {
+	return fields != nil && fields.ReviewOnly && aheadCount > 0
+}
+
+func shouldUseDirectMergeStrategy(roleIsPolecat bool, mergeStrategy string) bool {
+	return mergeStrategy == "direct" && !roleIsPolecat
 }
 
 func init() {
@@ -418,7 +425,9 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 
 	// Get agent bead ID for cross-referencing
 	var agentBeadID string
+	roleIsPolecat := false
 	if roleInfo, err := GetRoleWithContext(cwd, townRoot); err == nil {
+		roleIsPolecat = roleInfo.Role == RolePolecat
 		ctx := RoleContext{
 			Role:     roleInfo.Role,
 			Rig:      roleInfo.Rig,
@@ -529,11 +538,15 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 		// this is a non-code task (email, research, analysis, PRD review)
 		// where zero commits is expected.
 		// Must be checked before the zero-commit guard below (GH#2496, gt-kvf).
+		var sourceIssueForNoMerge *beads.Issue
+		var attachmentFields *beads.AttachmentFields
 		isNoMergeTask := false
 		if issueID != "" {
 			noMergeBd := beads.New(cwd)
 			if noMergeIssue, showErr := noMergeBd.Show(issueID); showErr == nil {
-				if af := beads.ParseAttachmentFields(noMergeIssue); af != nil && (af.NoMerge || af.ReviewOnly) {
+				sourceIssueForNoMerge = noMergeIssue
+				attachmentFields = beads.ParseAttachmentFields(noMergeIssue)
+				if attachmentFields != nil && (attachmentFields.NoMerge || attachmentFields.ReviewOnly) {
 					isNoMergeTask = true
 				}
 			}
@@ -640,6 +653,10 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 			goto notifyWitness
 		}
 
+		if shouldBlockReviewOnlySubmission(attachmentFields, aheadCount) {
+			return fmt.Errorf("review_only issue %s cannot submit commits: refusing to push or create an MR for branch %s", issueID, branch)
+		}
+
 		// Branch contamination preflight: check if branch is significantly behind
 		// the effective target branch, which indicates the branch may contain stale merge-base
 		// artifacts that will pollute the PR diff. (GH#2220)
@@ -719,53 +736,57 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 
 		// Handle "direct" strategy: push to target branch, skip MR
 		if convoyInfo != nil && convoyInfo.MergeStrategy == "direct" {
-			fmt.Printf("%s Direct merge strategy: pushing to %s\n", style.Bold.Render("→"), defaultBranch)
-			// Push submodule changes before direct push (gt-dzs)
-			pushSubmoduleChanges(g, defaultBranch)
-			directRefspec := branch + ":" + defaultBranch
-			directPushErr := g.Push("origin", directRefspec, false)
-			if directPushErr != nil {
-				pushFailed = true
-				errMsg := fmt.Sprintf("direct push to %s failed: %v", defaultBranch, directPushErr)
-				doneErrors = append(doneErrors, errMsg)
-				style.PrintWarning("%s", errMsg)
-				goto notifyWitness
-			}
-			directCommitSHA, _ := g.Rev("HEAD")
-			if doneSkipVerify {
-				noteVerifiedPushSkipped(cwd, issueID, defaultBranch, directCommitSHA, "--skip-verify on direct merge")
-			} else if verifyErr := g.VerifyPushedCommit("origin", defaultBranch, directCommitSHA); verifyErr != nil {
-				pushFailed = true
-				errMsg := verifyErr.Error()
-				doneErrors = append(doneErrors, errMsg)
-				noteVerifiedPushFailure(cwd, issueID, defaultBranch, directCommitSHA, verifyErr)
-				style.PrintWarning("%s\nDirect merge pushed but remote verification failed. Source bead will remain in progress.", errMsg)
-				goto notifyWitness
-			}
-			fmt.Printf("%s Branch pushed directly to %s\n", style.Bold.Render("✓"), defaultBranch)
+			if shouldUseDirectMergeStrategy(roleIsPolecat, convoyInfo.MergeStrategy) {
+				fmt.Printf("%s Direct merge strategy: pushing to %s\n", style.Bold.Render("→"), defaultBranch)
+				// Push submodule changes before direct push (gt-dzs)
+				pushSubmoduleChanges(g, defaultBranch)
+				directRefspec := branch + ":" + defaultBranch
+				directPushErr := g.Push("origin", directRefspec, false)
+				if directPushErr != nil {
+					pushFailed = true
+					errMsg := fmt.Sprintf("direct push to %s failed: %v", defaultBranch, directPushErr)
+					doneErrors = append(doneErrors, errMsg)
+					style.PrintWarning("%s", errMsg)
+					goto notifyWitness
+				}
+				directCommitSHA, _ := g.Rev("HEAD")
+				if doneSkipVerify {
+					noteVerifiedPushSkipped(cwd, issueID, defaultBranch, directCommitSHA, "--skip-verify on direct merge")
+				} else if verifyErr := g.VerifyPushedCommit("origin", defaultBranch, directCommitSHA); verifyErr != nil {
+					pushFailed = true
+					errMsg := verifyErr.Error()
+					doneErrors = append(doneErrors, errMsg)
+					noteVerifiedPushFailure(cwd, issueID, defaultBranch, directCommitSHA, verifyErr)
+					style.PrintWarning("%s\nDirect merge pushed but remote verification failed. Source bead will remain in progress.", errMsg)
+					goto notifyWitness
+				}
+				fmt.Printf("%s Branch pushed directly to %s\n", style.Bold.Render("✓"), defaultBranch)
 
-			// Close the base issue — no MR/refinery will close it
-			if issueID != "" {
-				directBd := beads.New(cwd)
-				closeReason := fmt.Sprintf("Direct merge to %s (convoy strategy)", defaultBranch)
-				var closeErr error
-				for attempt := 1; attempt <= 3; attempt++ {
-					closeErr = directBd.ForceCloseWithReason(closeReason, issueID)
-					if closeErr == nil {
-						fmt.Printf("%s Issue %s closed (direct merge)\n", style.Bold.Render("✓"), issueID)
-						break
+				// Close the base issue — no MR/refinery will close it
+				if issueID != "" {
+					directBd := beads.New(cwd)
+					closeReason := fmt.Sprintf("Direct merge to %s (convoy strategy)", defaultBranch)
+					var closeErr error
+					for attempt := 1; attempt <= 3; attempt++ {
+						closeErr = directBd.ForceCloseWithReason(closeReason, issueID)
+						if closeErr == nil {
+							fmt.Printf("%s Issue %s closed (direct merge)\n", style.Bold.Render("✓"), issueID)
+							break
+						}
+						if attempt < 3 {
+							style.PrintWarning("close attempt %d/3 failed: %v (retrying in %ds)", attempt, closeErr, attempt*2)
+							time.Sleep(time.Duration(attempt*2) * time.Second)
+						}
 					}
-					if attempt < 3 {
-						style.PrintWarning("close attempt %d/3 failed: %v (retrying in %ds)", attempt, closeErr, attempt*2)
-						time.Sleep(time.Duration(attempt*2) * time.Second)
+					if closeErr != nil {
+						style.PrintWarning("could not close issue %s after 3 attempts: %v", issueID, closeErr)
 					}
 				}
-				if closeErr != nil {
-					style.PrintWarning("could not close issue %s after 3 attempts: %v", issueID, closeErr)
-				}
-			}
 
-			goto notifyWitness
+				goto notifyWitness
+			} else if roleIsPolecat {
+				style.PrintWarning("polecat direct merge strategy is disabled for %s; submitting through the merge queue instead", branch)
+			}
 		}
 
 		// Default: "mr" strategy (or no convoy) — push branch, create MR bead
@@ -894,81 +915,26 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 		bd := beads.NewWithBeadsDir(cwd, resolvedBeads)
 
 		// Check for no_merge flag - if set, skip merge queue and notify for review
-		sourceIssueForNoMerge, err := bd.Show(issueID)
-		if err == nil {
-			attachmentFields := beads.ParseAttachmentFields(sourceIssueForNoMerge)
+		if sourceIssueForNoMerge == nil {
+			sourceIssueForNoMerge, err = bd.Show(issueID)
+			if err == nil {
+				attachmentFields = beads.ParseAttachmentFields(sourceIssueForNoMerge)
+			}
+		}
+		if sourceIssueForNoMerge != nil {
 			if attachmentFields != nil && attachmentFields.NoMerge {
 				fmt.Printf("%s No-merge mode: skipping merge queue\n", style.Bold.Render("→"))
 				fmt.Printf("  Branch: %s\n", branch)
 				fmt.Printf("  Issue: %s\n", issueID)
 				fmt.Println()
 
-				// When merge_strategy=pr, create a GitHub PR for human review
-				// instead of just leaving the branch on origin (gas-rfi).
-				var prURL string
-				noMergeSettingsPath := filepath.Join(townRoot, rigName, "settings", "config.json")
-				if noMergeSettings, noMergeSettingsErr := config.LoadRigSettings(noMergeSettingsPath); noMergeSettingsErr == nil &&
-					noMergeSettings.MergeQueue != nil && noMergeSettings.MergeQueue.MergeStrategy == "pr" {
-					issueTitle := sourceIssueForNoMerge.Title
-					prTitle := fmt.Sprintf("%s (%s)", issueTitle, issueID)
-					if issueTitle == "" {
-						prTitle = issueID
-					}
-					// Build PR body from bead description + diff stat
-					var prBodyBuilder strings.Builder
-					prBodyBuilder.WriteString("## Summary\n\n")
-					if sourceIssueForNoMerge.Description != "" {
-						// Strip attachment metadata lines from description
-						descLines := strings.Split(sourceIssueForNoMerge.Description, "\n")
-						var cleanDesc []string
-						for _, line := range descLines {
-							trimmed := strings.TrimSpace(line)
-							if strings.HasPrefix(trimmed, "attached_") || strings.HasPrefix(trimmed, "dispatched_by:") || strings.HasPrefix(trimmed, "formula_vars:") {
-								continue
-							}
-							cleanDesc = append(cleanDesc, line)
-						}
-						desc := strings.TrimSpace(strings.Join(cleanDesc, "\n"))
-						if desc != "" {
-							prBodyBuilder.WriteString(desc)
-							prBodyBuilder.WriteString("\n\n")
-						}
-					}
-					// Add diff stat for quick review context
-					if diffStat, diffErr := g.DiffStat(defaultBranch + "..." + branch); diffErr == nil && diffStat != "" {
-						prBodyBuilder.WriteString("## Changes\n\n```\n")
-						prBodyBuilder.WriteString(diffStat)
-						prBodyBuilder.WriteString("```\n\n")
-					}
-					prBodyBuilder.WriteString("---\n")
-					prBodyBuilder.WriteString(fmt.Sprintf("*Polecat: %s | Issue: %s*\n", worker, issueID))
-					prBody := prBodyBuilder.String()
-					ghCmd := exec.CommandContext(context.Background(), "gh", "pr", "create",
-						"--base", defaultBranch,
-						"--head", branch,
-						"--title", prTitle,
-						"--body", prBody,
-					)
-					ghCmd.Dir = cwd
-					prOutput, prErr := ghCmd.Output()
-					if prErr != nil {
-						style.PrintWarning("could not create GitHub PR: %v", prErr)
-					} else {
-						prURL = strings.TrimSpace(string(prOutput))
-						fmt.Printf("%s GitHub PR created: %s\n", style.Bold.Render("✓"), prURL)
-					}
-				} else {
-					fmt.Printf("%s\n", style.Dim.Render("Work stays on feature branch for human review."))
-				}
+				fmt.Printf("%s\n", style.Dim.Render("Work stays on feature branch for human review."))
 
 				// Mail dispatcher with READY_FOR_REVIEW
 				if dispatcher := attachmentFields.DispatchedBy; dispatcher != "" {
 					townRouter := mail.NewRouter(townRoot)
 					defer townRouter.WaitPendingNotifications()
 					reviewBody := fmt.Sprintf("Branch: %s\nIssue: %s\nReady for review.", branch, issueID)
-					if prURL != "" {
-						reviewBody = fmt.Sprintf("Branch: %s\nIssue: %s\nPR: %s\nReady for review.", branch, issueID, prURL)
-					}
 					reviewMsg := &mail.Message{
 						To:      dispatcher,
 						From:    detectSender(),
@@ -1002,9 +968,6 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 					}
 
 					closeReason := "No-merge work completed; merge queue skipped"
-					if prURL != "" {
-						closeReason = fmt.Sprintf("%s\npr_url: %s", closeReason, prURL)
-					}
 					if canCloseIssue {
 						if closeErr := forceCloseIssueWithRetry(
 							bd.ForceCloseWithReason,
@@ -1032,50 +995,54 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 			convoyInfo = getConvoyInfoForIssue(issueID)
 		}
 		if convoyInfo != nil && convoyInfo.MergeStrategy == "direct" {
-			fmt.Printf("%s Late-detected direct merge strategy: pushing to %s\n", style.Bold.Render("→"), defaultBranch)
-			fmt.Printf("  Convoy: %s\n", convoyInfo.ID)
+			if shouldUseDirectMergeStrategy(roleIsPolecat, convoyInfo.MergeStrategy) {
+				fmt.Printf("%s Late-detected direct merge strategy: pushing to %s\n", style.Bold.Render("→"), defaultBranch)
+				fmt.Printf("  Convoy: %s\n", convoyInfo.ID)
 
-			// Push branch directly to main (the earlier push went to origin/<branch>)
-			directRefspec := branch + ":" + defaultBranch
-			directPushErr := g.Push("origin", directRefspec, false)
-			if directPushErr != nil {
-				// Direct push failed — fall through to normal MR creation
-				style.PrintWarning("late direct push to %s failed: %v — falling through to MR", defaultBranch, directPushErr)
-			} else {
-				lateDirectCommitSHA, _ := g.Rev("HEAD")
-				if doneSkipVerify {
-					noteVerifiedPushSkipped(cwd, issueID, defaultBranch, lateDirectCommitSHA, "--skip-verify on late direct merge")
-				} else if verifyErr := g.VerifyPushedCommit("origin", defaultBranch, lateDirectCommitSHA); verifyErr != nil {
-					pushFailed = true
-					errMsg := verifyErr.Error()
-					doneErrors = append(doneErrors, errMsg)
-					noteVerifiedPushFailure(cwd, issueID, defaultBranch, lateDirectCommitSHA, verifyErr)
-					style.PrintWarning("%s\nLate direct merge pushed but remote verification failed. Source bead will remain in progress.", errMsg)
+				// Push branch directly to main (the earlier push went to origin/<branch>)
+				directRefspec := branch + ":" + defaultBranch
+				directPushErr := g.Push("origin", directRefspec, false)
+				if directPushErr != nil {
+					// Direct push failed — fall through to normal MR creation
+					style.PrintWarning("late direct push to %s failed: %v — falling through to MR", defaultBranch, directPushErr)
+				} else {
+					lateDirectCommitSHA, _ := g.Rev("HEAD")
+					if doneSkipVerify {
+						noteVerifiedPushSkipped(cwd, issueID, defaultBranch, lateDirectCommitSHA, "--skip-verify on late direct merge")
+					} else if verifyErr := g.VerifyPushedCommit("origin", defaultBranch, lateDirectCommitSHA); verifyErr != nil {
+						pushFailed = true
+						errMsg := verifyErr.Error()
+						doneErrors = append(doneErrors, errMsg)
+						noteVerifiedPushFailure(cwd, issueID, defaultBranch, lateDirectCommitSHA, verifyErr)
+						style.PrintWarning("%s\nLate direct merge pushed but remote verification failed. Source bead will remain in progress.", errMsg)
+						goto notifyWitness
+					}
+					fmt.Printf("%s Branch pushed directly to %s\n", style.Bold.Render("✓"), defaultBranch)
+
+					// Close the issue directly — refinery won't process it.
+					if issueID != "" {
+						var closeErr error
+						for attempt := 1; attempt <= 3; attempt++ {
+							closeErr = bd.ForceCloseWithReason(
+								fmt.Sprintf("Direct merge to %s (convoy strategy, late detection)", defaultBranch), issueID)
+							if closeErr == nil {
+								fmt.Printf("%s Issue %s closed (direct merge)\n", style.Bold.Render("✓"), issueID)
+								break
+							}
+							if attempt < 3 {
+								style.PrintWarning("close attempt %d/3 failed: %v (retrying in %ds)", attempt, closeErr, attempt*2)
+								time.Sleep(time.Duration(attempt*2) * time.Second)
+							}
+						}
+						if closeErr != nil {
+							style.PrintWarning("could not close issue %s after 3 attempts: %v", issueID, closeErr)
+						}
+					}
+
 					goto notifyWitness
 				}
-				fmt.Printf("%s Branch pushed directly to %s\n", style.Bold.Render("✓"), defaultBranch)
-
-				// Close the issue directly — refinery won't process it.
-				if issueID != "" {
-					var closeErr error
-					for attempt := 1; attempt <= 3; attempt++ {
-						closeErr = bd.ForceCloseWithReason(
-							fmt.Sprintf("Direct merge to %s (convoy strategy, late detection)", defaultBranch), issueID)
-						if closeErr == nil {
-							fmt.Printf("%s Issue %s closed (direct merge)\n", style.Bold.Render("✓"), issueID)
-							break
-						}
-						if attempt < 3 {
-							style.PrintWarning("close attempt %d/3 failed: %v (retrying in %ds)", attempt, closeErr, attempt*2)
-							time.Sleep(time.Duration(attempt*2) * time.Second)
-						}
-					}
-					if closeErr != nil {
-						style.PrintWarning("could not close issue %s after 3 attempts: %v", issueID, closeErr)
-					}
-				}
-
-				goto notifyWitness
+			} else if roleIsPolecat {
+				style.PrintWarning("late-detected polecat direct merge strategy is disabled for %s; submitting through the merge queue instead", branch)
 			}
 		}
 

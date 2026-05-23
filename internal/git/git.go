@@ -978,19 +978,34 @@ func (g *Git) DeleteRemoteBranch(remote, branch string) error {
 	return err
 }
 
-// HasOpenPR checks whether the given branch has an open pull request on GitHub.
+// OpenPRExists checks whether the given branch has an open pull request on GitHub.
 // Uses the gh CLI to query for open PRs with the branch as head ref.
-// Returns false on any error (fail-open: branch deletion proceeds if gh is unavailable).
-func (g *Git) HasOpenPR(branch string) bool {
+func (g *Git) OpenPRExists(branch string) (bool, error) {
 	cmd := exec.Command("gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number", "--limit", "1")
 	cmd.Dir = g.workDir
 	out, err := cmd.Output()
 	if err != nil {
-		return false // fail-open: can't determine PR state, allow deletion
+		return false, fmt.Errorf("gh pr list failed: %w", err)
 	}
 	out = bytes.TrimSpace(out)
-	// Empty array "[]" means no open PRs
-	return len(out) > 2
+	var prs []struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(out, &prs); err != nil {
+		return false, fmt.Errorf("failed to parse gh pr list output: %w", err)
+	}
+	return len(prs) > 0, nil
+}
+
+// HasOpenPR checks whether the given branch has an open pull request on GitHub.
+// It fails closed: if PR detection errors, callers that use the bool-only helper
+// must behave as if a PR exists rather than deleting the branch.
+func (g *Git) HasOpenPR(branch string) bool {
+	exists, err := g.OpenPRExists(branch)
+	if err != nil {
+		return true
+	}
+	return exists
 }
 
 // FindPRNumber returns the GitHub PR number for the given branch, or 0 if none exists.

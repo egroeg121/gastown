@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/git"
+	"github.com/steveyegge/gastown/internal/lock"
 	"github.com/steveyegge/gastown/internal/polecat"
 	"github.com/steveyegge/gastown/internal/rig"
 	"github.com/steveyegge/gastown/internal/style"
@@ -1748,6 +1749,17 @@ func runPolecatNuke(cmd *cobra.Command, args []string) error {
 // 4. Close agent bead
 // This is the canonical cleanup path used by both `polecat nuke` and `polecat stale --cleanup`.
 func nukePolecatFull(polecatName, rigName string, mgr *polecat.Manager, r *rig.Rig) error {
+	releaseLease, leaseErr := acquirePolecatActionLease(r, polecatName)
+	if leaseErr != nil {
+		return leaseErr
+	}
+	defer releaseLease()
+
+	initialInfo, err := recheckPolecatNukeTarget(mgr, polecatName, nil, "before kill")
+	if err != nil {
+		return err
+	}
+
 	t := tmux.NewTmux()
 
 	// Step 1: Kill tmux session unconditionally to prevent ghost sessions
@@ -1762,7 +1774,7 @@ func nukePolecatFull(polecatName, rigName string, mgr *polecat.Manager, r *rig.R
 	}
 
 	// Step 2: Get polecat info before deletion (for branch name + hooked work bead)
-	polecatInfo, getErr := mgr.Get(polecatName)
+	polecatInfo, getErr := recheckPolecatNukeTarget(mgr, polecatName, initialInfo, "before molecule cleanup")
 	var branchToDelete string
 	if getErr == nil && polecatInfo != nil {
 		branchToDelete = polecatInfo.Branch
@@ -1803,6 +1815,10 @@ func nukePolecatFull(polecatName, rigName string, mgr *polecat.Manager, r *rig.R
 				fmt.Printf("  %s pushed branch %s before nuke\n", style.Success.Render("✓"), branchToDelete)
 			}
 		}
+	}
+
+	if _, err := recheckPolecatNukeTarget(mgr, polecatName, initialInfo, "before worktree removal"); err != nil {
+		return err
 	}
 
 	// Step 3: Delete worktree (nuclear=true to bypass safety checks for stale polecats)
@@ -1855,6 +1871,38 @@ func nukePolecatFull(polecatName, rigName string, mgr *polecat.Manager, r *rig.R
 	purgeClosedEphemeralBeads(bd)
 
 	return nil
+}
+
+func acquirePolecatActionLease(r *rig.Rig, polecatName string) (func(), error) {
+	lockDir := filepath.Join(r.Path, ".runtime", "locks")
+	if err := os.MkdirAll(lockDir, 0755); err != nil {
+		return nil, fmt.Errorf("creating polecat action lock dir: %w", err)
+	}
+	lockPath := filepath.Join(lockDir, fmt.Sprintf("polecat-%s.lock", polecatName))
+	unlock, err := lock.FlockAcquire(lockPath)
+	if err != nil {
+		return nil, fmt.Errorf("acquiring polecat action lease for %s/%s: %w", r.Name, polecatName, err)
+	}
+	return unlock, nil
+}
+
+func recheckPolecatNukeTarget(mgr *polecat.Manager, polecatName string, expected *polecat.Polecat, phase string) (*polecat.Polecat, error) {
+	current, err := mgr.Get(polecatName)
+	if err != nil {
+		return nil, fmt.Errorf("rechecking polecat %s %s: %w", polecatName, phase, err)
+	}
+	if polecatNukeTargetChanged(expected, current) {
+		return nil, fmt.Errorf("refusing to nuke %s: polecat state changed %s (branch %q→%q, issue %q→%q)",
+			polecatName, phase, expected.Branch, current.Branch, expected.Issue, current.Issue)
+	}
+	return current, nil
+}
+
+func polecatNukeTargetChanged(expected, current *polecat.Polecat) bool {
+	if expected == nil || current == nil {
+		return false
+	}
+	return current.Branch != expected.Branch || current.Issue != expected.Issue || current.ClonePath != expected.ClonePath
 }
 
 // nukeCleanupMolecules burns any molecule attached to a work bead during polecat nuke.
