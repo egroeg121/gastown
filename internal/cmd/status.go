@@ -800,15 +800,12 @@ func gatherStatus() (TownStatus, error) {
 	if doltCfg.IsRemote() {
 		status.Dolt = &DoltInfo{Remote: true, Port: doltCfg.Port}
 	} else {
-		doltRunning, doltPid, _ := doltserver.IsRunning(townRoot)
-		port := doltCfg.Port
-		if doltRunning {
-			// Read the actual port from state — doltCfg.Port comes from
-			// DefaultConfig which reads GT_DOLT_PORT from the shell env,
-			// but gt status is typically run without that env var set.
-			if state, err := doltserver.LoadState(townRoot); err == nil && state.Port > 0 {
-				port = state.Port
-			}
+		live, _ := doltserver.ResolveLiveServer(townRoot)
+		doltRunning, doltPid, port := false, 0, doltCfg.Port
+		if live != nil {
+			doltRunning = live.Running
+			doltPid = live.PID
+			port = live.Port
 		}
 		doltInfo := &DoltInfo{
 			Running: doltRunning,

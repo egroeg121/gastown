@@ -291,8 +291,21 @@ func (c *DoltServerReachableCheck) Run(ctx *CheckContext) *CheckResult {
 	unreachableRigs := 0
 	for addr, rigs := range rigsByAddr {
 		totalRigs += len(rigs)
-		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-		if err != nil {
+		serverReachable := false
+		if isLocalDoltAddr(addr) && portForAddr(addr) == doltserver.DefaultConfig(ctx.TownRoot).Port {
+			live, liveErr := doltserver.ResolveLiveServer(ctx.TownRoot)
+			serverReachable = liveErr == nil && live.Running
+			if liveErr == nil && live.Running && live.Source != "" {
+				details = append(details, fmt.Sprintf("Local Dolt resolved via %s", live.Source))
+			}
+		} else {
+			conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+			if err == nil {
+				_ = conn.Close()
+				serverReachable = true
+			}
+		}
+		if !serverReachable {
 			unreachable = append(unreachable, addr)
 			unreachableRigs += len(rigs)
 			var rigNames []string
@@ -301,7 +314,6 @@ func (c *DoltServerReachableCheck) Run(ctx *CheckContext) *CheckResult {
 			}
 			details = append(details, fmt.Sprintf("Server %s unreachable (rigs: %s)", addr, strings.Join(rigNames, ", ")))
 		} else {
-			_ = conn.Close()
 			cfg := doltserver.DefaultConfig(ctx.TownRoot)
 			cfg.Host = hostForAddr(addr)
 			cfg.Port = portForAddr(addr)

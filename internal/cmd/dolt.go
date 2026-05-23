@@ -568,10 +568,12 @@ func runDoltStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not in a Gas Town workspace: %w", err)
 	}
 
-	running, pid, err := doltserver.IsRunning(townRoot)
+	live, err := doltserver.ResolveLiveServer(townRoot)
 	if err != nil {
 		return fmt.Errorf("checking server status: %w", err)
 	}
+	running := live.Running
+	pid := live.PID
 
 	config := doltserver.DefaultConfig(townRoot)
 
@@ -608,26 +610,27 @@ func runDoltStatus(cmd *cobra.Command, args []string) error {
 			style.Bold.Render("●"),
 			style.Bold.Render("running"),
 			pid)
+		if live.Source != "" {
+			fmt.Printf("  Source: %s\n", live.Source)
+		}
 
-		// Load state for more details
-		state, err := doltserver.LoadState(townRoot)
-		if err == nil && !state.StartedAt.IsZero() {
-			fmt.Printf("  Started: %s\n", state.StartedAt.Format("2006-01-02 15:04:05"))
-			fmt.Printf("  Port: %d\n", state.Port)
-			fmt.Printf("  Data dir: %s\n", state.DataDir)
-			if len(state.Databases) > 0 {
+		if !live.StartedAt.IsZero() {
+			fmt.Printf("  Started: %s\n", live.StartedAt.Format("2006-01-02 15:04:05"))
+		}
+		fmt.Printf("  Port: %d\n", live.Port)
+		fmt.Printf("  Data dir: %s\n", live.DataDir)
+		if len(live.Databases) > 0 {
 				owners := doltserver.CollectDatabaseOwners(townRoot)
 				fmt.Printf("  Databases:\n")
-				for _, db := range state.Databases {
+				for _, db := range live.Databases {
 					if owner, ok := owners[db]; ok {
 						fmt.Printf("    - %-20s (%s)\n", db, owner)
 					} else {
 						fmt.Printf("    - %s\n", db)
 					}
 				}
-			}
-			fmt.Printf("  Connection: %s\n", doltserver.GetConnectionString(townRoot))
 		}
+		fmt.Printf("  Connection: %s\n", doltserver.GetConnectionString(townRoot))
 
 		// Resource metrics
 		metrics := doltserver.GetHealthMetrics(townRoot)
@@ -734,24 +737,25 @@ func runDoltDump(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not in a Gas Town workspace: %w", err)
 	}
 
-	running, pid, err := doltserver.IsRunning(townRoot)
+	live, err := doltserver.ResolveLiveServer(townRoot)
 	if err != nil {
 		return fmt.Errorf("checking server status: %w", err)
 	}
-	if !running {
+	if !live.Running {
 		return fmt.Errorf("Dolt server is not running — nothing to dump")
 	}
 
 	config := doltserver.DefaultConfig(townRoot)
 
 	fmt.Printf("Dolt diagnostic snapshot (non-fatal)\n")
-	fmt.Printf("  Live PID:   %d\n", pid)
-	fmt.Printf("  Port:       %d\n", config.Port)
-	fmt.Printf("  Data dir:   %s\n", config.DataDir)
+	fmt.Printf("  Live PID:   %d\n", live.PID)
+	fmt.Printf("  Source:     %s\n", live.Source)
+	fmt.Printf("  Port:       %d\n", live.Port)
+	fmt.Printf("  Data dir:   %s\n", live.DataDir)
 	fmt.Printf("  Log file:   %s\n", config.LogFile)
 	fmt.Printf("  Connection: %s\n", doltserver.GetConnectionString(townRoot))
 
-	if info, err := doltserver.ReadSQLServerInfo(townRoot); err == nil {
+	if info := live.SQLInfo; info != nil {
 		fmt.Printf("  SQL metadata: %s\n", info.Path)
 		fmt.Printf("    PID:       %d\n", info.PID)
 		fmt.Printf("    Port:      %d\n", info.Port)
@@ -759,14 +763,14 @@ func runDoltDump(cmd *cobra.Command, args []string) error {
 			fmt.Printf("    Server ID: %s\n", info.ServerID)
 		}
 	} else {
-		fmt.Printf("  SQL metadata: unavailable (%v)\n", err)
+		fmt.Printf("  SQL metadata: unavailable\n")
 	}
 
-	if state, err := doltserver.LoadState(townRoot); err == nil && state.PID > 0 {
+	if state := live.State; state != nil && state.PID > 0 {
 		fmt.Printf("  Daemon state: %s\n", doltserver.StateFile(townRoot))
 		fmt.Printf("    PID:       %d", state.PID)
-		if state.PID != pid {
-			fmt.Printf(" (stale; live PID is %d)", pid)
+		if state.PID != live.PID {
+			fmt.Printf(" (stale; live PID is %d)", live.PID)
 		}
 		fmt.Println()
 		if !state.StartedAt.IsZero() {

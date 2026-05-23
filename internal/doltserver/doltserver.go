@@ -564,6 +564,53 @@ type SQLServerInfo struct {
 	Path     string
 }
 
+// LiveServerStatus is the canonical view of the Dolt SQL server currently
+// serving this town. Source identifies the verified evidence used to resolve it.
+type LiveServerStatus struct {
+	Running    bool
+	PID        int
+	Port       int
+	Host       string
+	DataDir    string
+	Remote     bool
+	Source     string
+	SourcePath string
+	StartedAt  time.Time
+	Databases  []string
+	SQLInfo    *SQLServerInfo
+	State      *State
+}
+
+type liveServerProbe struct {
+	processAlive       func(int) bool
+	listenerPID        func(int) int
+	tcpReachable       func(string, int) bool
+	processMatchesTown func(int) bool
+	readSQLInfo        func(*Config) (*SQLServerInfo, error)
+	loadState          func(string) (*State, error)
+}
+
+func defaultLiveServerProbe(townRoot string, config *Config) liveServerProbe {
+	return liveServerProbe{
+		processAlive: processIsAlive,
+		listenerPID:  findDoltServerOnPort,
+		tcpReachable: func(host string, port int) bool {
+			addr := net.JoinHostPort(host, strconv.Itoa(port))
+			conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+			if err != nil {
+				return false
+			}
+			_ = conn.Close()
+			return true
+		},
+		processMatchesTown: func(pid int) bool {
+			return doltProcessMatchesTown(townRoot, pid, config)
+		},
+		readSQLInfo: readSQLServerInfo,
+		loadState:   LoadState,
+	}
+}
+
 // StateFile returns the path to the state file.
 func StateFile(townRoot string) string {
 	return filepath.Join(townRoot, "daemon", "dolt-state.json")
@@ -666,30 +713,76 @@ func countDoltDatabases(dataDir string) int {
 	return count
 }
 
-// IsRunning checks if a Dolt server is running for the given town.
-
-// Returns (running, pid, error).
-// Checks both PID file AND port to detect externally-started servers.
-// For remote servers, skips PID/port scan and just does TCP reachability.
-func IsRunning(townRoot string) (bool, int, error) {
+// ResolveLiveServer returns the canonical live Dolt server status for this town.
+func ResolveLiveServer(townRoot string) (*LiveServerStatus, error) {
 	config := DefaultConfig(townRoot)
+	return resolveLiveServerWithConfig(townRoot, config, defaultLiveServerProbe(townRoot, config))
+}
+
+func resolveLiveServerWithConfig(townRoot string, config *Config, probe liveServerProbe) (*LiveServerStatus, error) {
+	status := &LiveServerStatus{
+		Port:    config.Port,
+		Host:    config.Host,
+		DataDir: config.DataDir,
+		Remote:  config.IsRemote(),
+	}
+	if status.Host == "" {
+		status.Host = "127.0.0.1"
+	}
 
 	// Remote server: no local PID/process to check — just TCP reachability.
 	if config.IsRemote() {
-		conn, err := net.DialTimeout("tcp", config.HostPort(), 2*time.Second)
-		if err != nil {
-			return false, 0, nil
+		if probe.tcpReachable(status.Host, config.Port) {
+			status.Running = true
+			status.Source = "remote-tcp"
 		}
-		_ = conn.Close()
-		return true, 0, nil
+		return status, nil
+	}
+
+	state, _ := probe.loadState(townRoot)
+	if state != nil {
+		status.State = state
 	}
 
 	// Prefer Dolt's own runtime metadata when present. During daemon restarts,
 	// daemon/dolt-state.json and daemon/dolt.pid can lag behind the live
 	// sql-server process, but .dolt/sql-server.info is written by Dolt itself.
-	if info, err := readSQLServerInfo(config); err == nil && info.Port == config.Port && info.PID > 0 {
-		if processIsAlive(info.PID) && isDoltServerOnPort(config.Port) && doltProcessMatchesTown(townRoot, info.PID, config) {
-			return true, info.PID, nil
+	if info, err := probe.readSQLInfo(config); err == nil {
+		status.SQLInfo = info
+		if liveServerCandidateIsValid(info.PID, info.Port, config.Port, probe) {
+			status.Running = true
+			status.PID = info.PID
+			status.Port = info.Port
+			if state != nil && state.PID == info.PID {
+				if state.DataDir != "" {
+					status.DataDir = state.DataDir
+				}
+				status.StartedAt = state.StartedAt
+				status.Databases = state.Databases
+			}
+			status.Source = "sql-server.info"
+			status.SourcePath = info.Path
+			return status, nil
+		}
+	}
+
+	if state != nil && state.PID > 0 {
+		port := state.Port
+		if port == 0 {
+			port = config.Port
+		}
+		if liveServerCandidateIsValid(state.PID, port, config.Port, probe) {
+			status.Running = true
+			status.PID = state.PID
+			status.Port = port
+			if state.DataDir != "" {
+				status.DataDir = state.DataDir
+			}
+			status.StartedAt = state.StartedAt
+			status.Databases = state.Databases
+			status.Source = "daemon-state"
+			status.SourcePath = StateFile(townRoot)
+			return status, nil
 		}
 	}
 
@@ -698,18 +791,13 @@ func IsRunning(townRoot string) (bool, int, error) {
 	if err == nil {
 		pidStr := strings.TrimSpace(string(data))
 		pid, err := strconv.Atoi(pidStr)
-		if err == nil {
-			// Check if process is alive
-			if processIsAlive(pid) {
-				// Verify it's actually serving on the expected port.
-				// More reliable than ps string matching (ZFC fix: gt-utuk).
-				if isDoltServerOnPort(config.Port) {
-					if doltProcessMatchesTown(townRoot, pid, config) {
-						return true, pid, nil
-					}
-					// Port served by a different town's Dolt — fall through to stale cleanup
-				}
-			}
+		if err == nil && liveServerCandidateIsValid(pid, config.Port, config.Port, probe) {
+			status.Running = true
+			status.PID = pid
+			status.Port = config.Port
+			status.Source = "daemon-pidfile"
+			status.SourcePath = config.PidFile
+			return status, nil
 		}
 		// PID file is stale, clean it up
 		_ = os.Remove(config.PidFile)
@@ -717,9 +805,13 @@ func IsRunning(townRoot string) (bool, int, error) {
 
 	// No valid PID file - check if port is in use by dolt anyway.
 	// This catches externally-started dolt servers.
-	pid := findDoltServerOnPort(config.Port)
-	if pid > 0 && doltProcessMatchesTown(townRoot, pid, config) {
-		return true, pid, nil
+	pid := probe.listenerPID(config.Port)
+	if pid > 0 && liveServerCandidateIsValid(pid, config.Port, config.Port, probe) {
+		status.Running = true
+		status.PID = pid
+		status.Port = config.Port
+		status.Source = "port-owner"
+		return status, nil
 	}
 
 	// Last resort: TCP reachability check. This handles Docker containers,
@@ -728,13 +820,42 @@ func IsRunning(townRoot string) (bool, int, error) {
 	// (e.g., the port is forwarded by a Docker proxy).
 	// We always check, even on the default port 3307, so that gt rig add
 	// succeeds when dolt is live regardless of how it was started.
-	conn, err := net.DialTimeout("tcp", config.HostPort(), 2*time.Second)
-	if err == nil {
-		_ = conn.Close()
-		return true, 0, nil
+	if probe.tcpReachable(status.Host, config.Port) {
+		status.Running = true
+		status.PID = 0
+		status.Port = config.Port
+		status.Source = "tcp-reachable"
+		return status, nil
 	}
 
-	return false, 0, nil
+	return status, nil
+}
+
+func liveServerCandidateIsValid(pid, candidatePort, expectedPort int, probe liveServerProbe) bool {
+	if pid <= 0 || candidatePort != expectedPort || !probe.processAlive(pid) {
+		return false
+	}
+	listenerPID := probe.listenerPID(expectedPort)
+	if listenerPID > 0 && listenerPID != pid {
+		return false
+	}
+	if listenerPID == 0 && !probe.tcpReachable("127.0.0.1", expectedPort) {
+		return false
+	}
+	return probe.processMatchesTown(pid)
+}
+
+// IsRunning checks if a Dolt server is running for the given town.
+//
+// Returns (running, pid, error).
+// Checks canonical live metadata, daemon state/pidfile, and port ownership.
+// For remote servers, skips PID/port scan and just does TCP reachability.
+func IsRunning(townRoot string) (bool, int, error) {
+	status, err := ResolveLiveServer(townRoot)
+	if err != nil {
+		return false, 0, err
+	}
+	return status.Running, status.PID, nil
 }
 
 // CheckServerReachable verifies the Dolt server is actually accepting TCP connections.
