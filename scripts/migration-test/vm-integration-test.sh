@@ -54,7 +54,7 @@ TESTS_RUN=0
 
 # Run as ubuntu user (files are owned by ubuntu)
 run_as_ubuntu() {
-    sudo -u ubuntu "$@"
+    sudo -u ubuntu env GT_DOLT_PORT="$DOLT_PORT" BEADS_DOLT_PORT="$DOLT_PORT" "$@"
 }
 
 # Create a master backup of all .beads dirs BEFORE any tests run.
@@ -166,7 +166,7 @@ kill_all_processes() {
 start_dolt_server() {
     log "Starting Dolt server on isolated port $DOLT_PORT..."
     local pid
-    pid=$(sudo -u ubuntu bash -c "nohup dolt sql-server --host 127.0.0.1 --port '$DOLT_PORT' --data-dir '$DOLT_DATA_DIR' > '$DOLT_DATA_DIR/server.log' 2>&1 & echo \\$!")
+    pid=$(run_as_ubuntu bash -c 'nohup dolt sql-server --host 127.0.0.1 --port "$GT_DOLT_PORT" --data-dir "$1" > "$1/server.log" 2>&1 & echo $!' _ "$DOLT_DATA_DIR")
     echo "$pid" > "$DOLT_PID_FILE"
     sleep 3
 
@@ -281,7 +281,7 @@ run_full_migration() {
 
         log "Migrating $rig_name..."
         cd "$rig_dir"
-        echo y | sudo -u ubuntu bd migrate dolt 2>&1 || warn "$rig_name: migrate returned non-zero"
+        echo y | run_as_ubuntu bd migrate dolt 2>&1 || warn "$rig_name: migrate returned non-zero"
     done
 
     # Stop dolt server before consolidation (gt dolt migrate requires it stopped)
@@ -290,7 +290,7 @@ run_full_migration() {
 
     # Consolidate dolt databases
     cd "$TOWN_ROOT"
-    sudo -u ubuntu gt dolt migrate 2>&1 || warn "gt dolt migrate returned non-zero"
+    run_as_ubuntu gt dolt migrate 2>&1 || warn "gt dolt migrate returned non-zero"
 
     # Restart dolt server
     start_dolt_server
@@ -365,10 +365,10 @@ verify_zero_artifacts() {
         local metadata="$rig_dir/.beads/metadata.json"
         [[ -f "$metadata" ]] || continue
 
-        local has_port=$(sudo python3 -c "import json; d=json.load(open('$metadata')); print('yes' if 'dolt_server_port' in d else 'no')" 2>/dev/null || echo "no")
+        local metadata_port=$(sudo python3 -c "import json; d=json.load(open('$metadata')); print(d.get('dolt_server_port', ''))" 2>/dev/null || echo "")
         local has_db=$(sudo python3 -c "import json; d=json.load(open('$metadata')); print('yes' if d.get('dolt_database','') else 'no')" 2>/dev/null || echo "no")
-        if [[ "$has_port" != "yes" || "$has_db" != "yes" ]]; then
-            fail_check "$test_name: $rig_name metadata missing dolt fields (port=$has_port, db=$has_db)"
+        if [[ "$metadata_port" != "$DOLT_PORT" || "$has_db" != "yes" ]]; then
+            fail_check "$test_name: $rig_name metadata missing dolt fields (port=$metadata_port, want=$DOLT_PORT, db=$has_db)"
         fi
     done
 }
@@ -386,7 +386,7 @@ verify_bd_operations() {
         cd "$rig_dir"
 
         # bd list should work
-        local list_output=$(sudo -u ubuntu bd list 2>&1) || true
+        local list_output=$(run_as_ubuntu bd list 2>&1) || true
         if echo "$list_output" | grep -qi "fatal\|panic\|SIGSEGV"; then
             fail_check "$test_name: bd list crashed for $rig_name"
         else
@@ -460,7 +460,7 @@ for rig_dir in "$TOWN_ROOT"/*/; do
     rig_name=$(basename "$rig_dir")
     [[ -f "$rig_dir/.beads/metadata.json" ]] || continue
     cd "$rig_dir"
-    count=$(sudo -u ubuntu bd list 2>/dev/null | wc -l)
+    count=$(run_as_ubuntu bd list 2>/dev/null | wc -l)
     PRE_COUNTS[$rig_name]=$count
     log "Pre-migration $rig_name: $count beads"
 done
@@ -477,7 +477,7 @@ for rig_dir in "$TOWN_ROOT"/*/; do
     rig_name=$(basename "$rig_dir")
     [[ -f "$rig_dir/.beads/metadata.json" ]] || continue
     cd "$rig_dir"
-    post_count=$(sudo -u ubuntu bd list 2>/dev/null | wc -l)
+    post_count=$(run_as_ubuntu bd list 2>/dev/null | wc -l)
     pre_count="${PRE_COUNTS[$rig_name]:-0}"
     log "Post-migration $rig_name: $post_count beads (was $pre_count)"
     if [[ "$pre_count" -gt 0 && "$post_count" -lt "$pre_count" ]]; then
@@ -515,7 +515,7 @@ if [[ ${#RIGS[@]} -ge 2 ]]; then
 
     log "Migrating only first rig ($FIRST_RIG), simulating crash..."
     cd "$TOWN_ROOT/$FIRST_RIG"
-    echo y | sudo -u ubuntu bd migrate dolt 2>&1 || warn "$FIRST_RIG: migrate returned non-zero"
+    echo y | run_as_ubuntu bd migrate dolt 2>&1 || warn "$FIRST_RIG: migrate returned non-zero"
 
     # Verify partial state
     first_backend=$(sudo python3 -c "import json; print(json.load(open('$TOWN_ROOT/$FIRST_RIG/.beads/metadata.json')).get('backend','unknown'))" 2>/dev/null)
@@ -531,12 +531,12 @@ if [[ ${#RIGS[@]} -ge 2 ]]; then
     # Now "resume" — migrate remaining rigs
     log "Resuming migration for remaining rigs..."
     cd "$TOWN_ROOT/$SECOND_RIG"
-    echo y | sudo -u ubuntu bd migrate dolt 2>&1 || warn "$SECOND_RIG: migrate returned non-zero"
+    echo y | run_as_ubuntu bd migrate dolt 2>&1 || warn "$SECOND_RIG: migrate returned non-zero"
 
     # Consolidate (stop server first)
     stop_dolt_server
     cd "$TOWN_ROOT"
-    sudo -u ubuntu gt dolt migrate 2>&1 || warn "gt dolt migrate returned non-zero"
+    run_as_ubuntu gt dolt migrate 2>&1 || warn "gt dolt migrate returned non-zero"
     start_dolt_server
 
     verify_zero_artifacts "Test4-partial-resume"
@@ -544,7 +544,7 @@ if [[ ${#RIGS[@]} -ge 2 ]]; then
     # Verify both rigs work
     for rig_name in "${RIGS[@]}"; do
         cd "$TOWN_ROOT/$rig_name"
-        count=$(sudo -u ubuntu bd list 2>/dev/null | wc -l)
+        count=$(run_as_ubuntu bd list 2>/dev/null | wc -l)
         if [[ "$count" -gt 0 ]]; then
             pass "Test4-partial-resume: $rig_name has $count beads after resume"
         else
@@ -571,7 +571,7 @@ for rig_dir in "$TOWN_ROOT"/*/; do
     rig_name=$(basename "$rig_dir")
     [[ -f "$rig_dir/.beads/metadata.json" ]] || continue
     cd "$rig_dir"
-    count=$(sudo -u ubuntu bd list 2>/dev/null | wc -l)
+    count=$(run_as_ubuntu bd list 2>/dev/null | wc -l)
     PASS1_COUNTS[$rig_name]=$count
     log "Before re-run $rig_name: $count beads"
 done
@@ -585,7 +585,7 @@ for rig_dir in "$TOWN_ROOT"/*/; do
     [[ -f "$rig_dir/.beads/metadata.json" ]] || continue
 
     cd "$rig_dir"
-    output=$(echo y | sudo -u ubuntu bd migrate dolt 2>&1) || true
+    output=$(echo y | run_as_ubuntu bd migrate dolt 2>&1) || true
     if echo "$output" | grep -qi "fatal\|panic\|corrupt\|segfault"; then
         fail_check "Test5-idempotent: $rig_name had fatal error on re-run"
         IDEM_ERRORS=$((IDEM_ERRORS + 1))
@@ -597,7 +597,7 @@ done
 # Run gt dolt migrate again (stop server first, as required)
 stop_dolt_server
 cd "$TOWN_ROOT"
-output=$(sudo -u ubuntu gt dolt migrate 2>&1) || true
+output=$(run_as_ubuntu gt dolt migrate 2>&1) || true
 if echo "$output" | grep -qi "fatal\|panic\|corrupt"; then
     fail_check "Test5-idempotent: gt dolt migrate had fatal error on re-run"
     IDEM_ERRORS=$((IDEM_ERRORS + 1))
@@ -606,8 +606,8 @@ start_dolt_server
 
 # Run gt dolt fix-metadata twice (must be harmless)
 cd "$TOWN_ROOT"
-sudo -u ubuntu gt dolt fix-metadata 2>&1 || true
-sudo -u ubuntu gt dolt fix-metadata 2>&1 || true
+run_as_ubuntu gt dolt fix-metadata 2>&1 || true
+run_as_ubuntu gt dolt fix-metadata 2>&1 || true
 
 verify_zero_artifacts "Test5-idempotent"
 
@@ -617,7 +617,7 @@ for rig_dir in "$TOWN_ROOT"/*/; do
     rig_name=$(basename "$rig_dir")
     [[ -f "$rig_dir/.beads/metadata.json" ]] || continue
     cd "$rig_dir"
-    post_count=$(sudo -u ubuntu bd list 2>/dev/null | wc -l)
+    post_count=$(run_as_ubuntu bd list 2>/dev/null | wc -l)
     pre_count="${PASS1_COUNTS[$rig_name]:-0}"
     if [[ "$pre_count" != "$post_count" ]]; then
         fail_check "Test5-idempotent: $rig_name count changed ($pre_count -> $post_count)"

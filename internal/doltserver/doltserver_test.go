@@ -336,6 +336,9 @@ func TestReapOwnedTestServersRefusesNonTempRoot(t *testing.T) {
 }
 
 func TestReapOwnedTestServersIgnoresNonDoltPID(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sleep subprocess fixture is POSIX-only")
+	}
 	townRoot := t.TempDir()
 	config := DefaultConfig(townRoot)
 	if err := os.MkdirAll(filepath.Dir(config.PidFile), 0755); err != nil {

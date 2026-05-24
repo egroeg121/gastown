@@ -38,6 +38,7 @@ func TestInstallCreatesCorrectStructure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gt install failed: %v\nOutput: %s", err, output)
 	}
+	assertDoltConfigPort(t, hqPath, doltPort)
 
 	// Verify directory structure
 	assertDirExists(t, hqPath, "HQ root")
@@ -102,6 +103,7 @@ func TestInstallBeadsHasCorrectPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gt install failed: %v\nOutput: %s", err, output)
 	}
+	assertDoltConfigPort(t, hqPath, doltPort)
 
 	// Verify .beads/ directory exists
 	beadsDir := filepath.Join(hqPath, ".beads")
@@ -364,6 +366,7 @@ func TestInstallFormulasProvisioned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gt install failed: %v\nOutput: %s", err, output)
 	}
+	assertDoltConfigPort(t, hqPath, doltPort)
 
 	// Verify .beads/formulas/ directory exists
 	formulasDir := filepath.Join(hqPath, ".beads", "formulas")
@@ -501,6 +504,18 @@ func assertFileExists(t *testing.T, path, name string) {
 	}
 }
 
+func assertDoltConfigPort(t *testing.T, hqPath, wantPort string) {
+	t.Helper()
+	configPath := filepath.Join(hqPath, ".dolt-data", "config.yaml")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("reading Dolt config %s: %v", configPath, err)
+	}
+	if !strings.Contains(string(data), "port: "+wantPort) {
+		t.Fatalf("Dolt config does not use isolated port %s:\n%s", wantPort, data)
+	}
+}
+
 func assertSlotValue(t *testing.T, townRoot, issueID, slot, want string) {
 	t.Helper()
 	cmd := exec.Command("bd", "--json", "slot", "show", issueID)
@@ -557,6 +572,7 @@ func TestInstallDoctorClean(t *testing.T) {
 	// 1. Install town with git (now includes dolt identity, HQ init, server start)
 	t.Run("install", func(t *testing.T) {
 		runGTCmd(t, gtBinary, tmpDir, env, "install", hqPath, "--name", "test-town", "--git", "--dolt-port", doltPort)
+		assertDoltConfigPort(t, hqPath, doltPort)
 	})
 	t.Cleanup(func() {
 		cmd := exec.Command(gtBinary, "dolt", "stop")
@@ -688,6 +704,7 @@ func TestInstallWithDaemon(t *testing.T) {
 	// 1. Install town with git (now includes dolt identity, HQ init, server start)
 	t.Run("install", func(t *testing.T) {
 		runGTCmd(t, gtBinary, tmpDir, env, "install", hqPath, "--name", "test-town", "--git", "--dolt-port", doltPort)
+		assertDoltConfigPort(t, hqPath, doltPort)
 	})
 	t.Cleanup(func() {
 		cmd := exec.Command(gtBinary, "dolt", "stop")
