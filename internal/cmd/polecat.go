@@ -1107,6 +1107,13 @@ func runPolecatCheckRecovery(cmd *cobra.Command, args []string) error {
 		hookSafe, hookTerminal, hookBlocker := hookBeadSafeForCleanup(bd, hookBead)
 		workTerminal := beadTerminal || hookTerminal
 		sourceHint := agentSourceIssueHint(status.Issue, fields)
+		if status.Issue == "" && sourceHint != "" {
+			status.Issue = sourceHint
+		}
+		if !beadTerminal && sourceHint != "" {
+			beadTerminal = isAssignedBeadTerminal(bd, sourceHint)
+			workTerminal = beadTerminal || hookTerminal
+		}
 		var gitState *GitState
 		var gitErr error
 		gitStateLoaded := false
@@ -1122,20 +1129,9 @@ func runPolecatCheckRecovery(cmd *cobra.Command, args []string) error {
 		if diagnostic != "" {
 			status.Diagnostics = append(status.Diagnostics, diagnostic)
 		}
-		sourceHint := agentSourceIssueHint(status.Issue, fields)
-		if status.Issue == "" && sourceHint != "" {
-			status.Issue = sourceHint
-		}
-		if !beadTerminal && sourceHint != "" {
-			beadTerminal = isAssignedBeadTerminal(bd, sourceHint)
-		}
 		activeMRAssessment := polecat.ActiveMRAssessment{}
 		if fields.ActiveMR != "" {
-			loadGitState()
-			gitSafe := gitErr == nil && gitState != nil && gitState.Clean
-			if !gitSafe {
-				gitSafe = activeMRGitSafeForWorktree(p.ClonePath)
-			}
+			gitSafe := activeMRGitSafeForWorktree(p.ClonePath)
 			activeMRAssessment = polecat.AssessActiveMR(bd, polecat.ActiveMRInput{
 				ActiveMR:        fields.ActiveMR,
 				SourceIssueHint: sourceHint,
@@ -1155,17 +1151,9 @@ func runPolecatCheckRecovery(cmd *cobra.Command, args []string) error {
 			if status.CleanupStatus == polecat.CleanupUnpushed {
 				loadGitState()
 			}
-<<<<<<< HEAD
-			if staleCleanupStatusCanBeIgnoredForRecovery(status.CleanupStatus, workTerminal, hookSafe, activeMRSafe, gitState, gitErr) {
-				status.Diagnostics = append(status.Diagnostics, fmt.Sprintf("ignored_stale_cleanup_status=%s direct_git_state=clean work_ref=terminal", status.CleanupStatus))
-=======
-			gitSafe := gitErr == nil && gitState != nil && gitState.Clean
-			if !gitSafe {
-				gitSafe = activeMRGitSafeForWorktree(p.ClonePath)
-			}
-			if staleCleanupStatusCanBeIgnoredForRecovery(status.CleanupStatus, beadTerminal, hookBead, activeMRAssessment.Pending, gitSafe) {
-				status.Diagnostics = append(status.Diagnostics, fmt.Sprintf("ignored_stale_cleanup_status=%s direct_git_state=clean assigned_bead=terminal", status.CleanupStatus))
->>>>>>> 851624d2 (WIP: checkpoint (auto))
+			gitSafe := activeMRGitSafeForWorktree(p.ClonePath)
+			if staleCleanupStatusCanBeIgnoredForRecovery(status.CleanupStatus, workTerminal, hookSafe, activeMRSafe, gitSafe) {
+				status.Diagnostics = append(status.Diagnostics, fmt.Sprintf("ignored_stale_cleanup_status=%s direct_git_state=safe work_ref=terminal", status.CleanupStatus))
 			} else {
 				status.Blockers = append(status.Blockers, blocker)
 			}
@@ -1307,21 +1295,11 @@ func agentHookBead(agentIssue *beads.Issue, fields *beads.AgentFields) string {
 	return ""
 }
 
-<<<<<<< HEAD
-func staleCleanupStatusCanBeIgnoredForRecovery(status polecat.CleanupStatus, workTerminal, hookSafe, activeMRSafe bool, gitState *GitState, gitErr error) bool {
+func staleCleanupStatusCanBeIgnoredForRecovery(status polecat.CleanupStatus, workTerminal, hookSafe, activeMRSafe, gitSafe bool) bool {
 	return status == polecat.CleanupUnpushed &&
 		workTerminal &&
 		hookSafe &&
 		activeMRSafe &&
-		gitErr == nil &&
-		gitState != nil &&
-		gitState.Clean
-=======
-func staleCleanupStatusCanBeIgnoredForRecovery(status polecat.CleanupStatus, beadTerminal bool, hookBead string, activeMRPending bool, gitSafe bool) bool {
-	return status == polecat.CleanupUnpushed &&
-		beadTerminal &&
-		hookBead == "" &&
-		!activeMRPending &&
 		gitSafe
 }
 
@@ -1340,7 +1318,6 @@ func activeMRGitSafeForWorktree(worktreePath string) bool {
 		return false
 	}
 	return pushed && unpushed == 0
->>>>>>> 851624d2 (WIP: checkpoint (auto))
 }
 
 func hookBeadSafeForCleanup(bd issueShower, hookBead string) (safe bool, terminal bool, blocker string) {
