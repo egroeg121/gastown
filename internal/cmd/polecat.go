@@ -436,8 +436,11 @@ func activeMRBlocksReuse(bd reuseMRShower, mrID string) bool {
 		return true
 	}
 	mr, err := bd.Show(mrID)
-	if err != nil || mr == nil {
-		return true
+	if err != nil {
+		return !errors.Is(err, beads.ErrNotFound)
+	}
+	if mr == nil {
+		return false
 	}
 	return !beads.IssueStatus(mr.Status).IsTerminal()
 }
@@ -1011,6 +1014,7 @@ type RecoveryStatus struct {
 	SafeToNuke           bool                  `json:"safe_to_nuke"`
 	NeedsMQSubmit        bool                  `json:"needs_mq_submit"`
 	CountsTowardCapacity bool                  `json:"counts_toward_capacity"`
+	ReuseStatus          string                `json:"reuse_status,omitempty"`
 	Branch               string                `json:"branch,omitempty"`
 	Issue                string                `json:"issue,omitempty"`
 	MQStatus             string                `json:"mq_status,omitempty"` // "submitted", "not_submitted", "not_required", "unknown"
@@ -1233,6 +1237,7 @@ func applyWorkstateDispositionToRecoveryStatus(status *RecoveryStatus, dispositi
 	status.NeedsRecovery = disposition.NeedsRecovery
 	status.NeedsMQSubmit = disposition.NeedsMQSubmit
 	status.CountsTowardCapacity = disposition.CountsTowardCapacity
+	status.ReuseStatus = disposition.ReuseStatus
 	status.MQStatus = disposition.MQStatus
 	status.Blockers = disposition.Blockers
 }
