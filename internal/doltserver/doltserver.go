@@ -2710,12 +2710,18 @@ func EnsureRigIssuePrefix(townRoot, rigName string, serverMode bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	var store beadssdk.Storage
-	if serverMode {
-		store, err = beadssdk.OpenFromConfig(ctx, beadsDir)
-	} else {
-		store, err = beadssdk.Open(ctx, RigDatabaseDir(townRoot, rigName))
+	if !serverMode {
+		if err := Start(townRoot); err != nil {
+			return fmt.Errorf("starting temporary Dolt server: %w", err)
+		}
+		defer func() {
+			if err := Stop(townRoot); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not stop temporary Dolt server after issue_prefix seed: %v\n", err)
+			}
+		}()
 	}
+
+	store, err := openRigStoreFromConfig(ctx, beadsDir, rigName)
 	if err != nil {
 		return fmt.Errorf("opening beads database: %w", err)
 	}
@@ -2725,6 +2731,61 @@ func EnsureRigIssuePrefix(townRoot, rigName string, serverMode bool) error {
 		return fmt.Errorf("setting issue_prefix: %w", err)
 	}
 	return nil
+}
+
+var beadsOpenEnvMu sync.Mutex
+
+func openRigStoreFromConfig(ctx context.Context, beadsDir, rigName string) (beadssdk.Storage, error) {
+	// bd's public config loader lets BEADS_DOLT_* env override metadata.json.
+	// Polecat/rig processes often carry those env vars for their current database,
+	// so scope them to the database/server being initialized here.
+	beadsOpenEnvMu.Lock()
+	defer beadsOpenEnvMu.Unlock()
+
+	gtConfig := DefaultConfig(townRootForBeadsDir(beadsDir))
+	overrides := map[string]string{
+		"BEADS_DOLT_SERVER_DATABASE": rigName,
+		"BEADS_DOLT_SERVER_HOST":     gtConfig.EffectiveHost(),
+		"BEADS_DOLT_SERVER_PORT":     strconv.Itoa(gtConfig.Port),
+		"BEADS_DOLT_PORT":            strconv.Itoa(gtConfig.Port),
+	}
+	type oldEnv struct {
+		value string
+		had   bool
+	}
+	old := make(map[string]oldEnv, len(overrides))
+	for key, value := range overrides {
+		oldValue, had := os.LookupEnv(key)
+		old[key] = oldEnv{value: oldValue, had: had}
+		if err := os.Setenv(key, value); err != nil {
+			return nil, err
+		}
+	}
+	defer func() {
+		for key, oldValue := range old {
+			if oldValue.had {
+				_ = os.Setenv(key, oldValue.value)
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		}
+	}()
+
+	return beadssdk.OpenFromConfig(ctx, beadsDir)
+}
+
+func townRootForBeadsDir(beadsDir string) string {
+	if strings.HasSuffix(beadsDir, filepath.Join("mayor", "rig", ".beads")) {
+		return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(beadsDir))))
+	}
+	if filepath.Base(beadsDir) == ".beads" {
+		parent := filepath.Dir(beadsDir)
+		if filepath.Base(parent) == "rig" && filepath.Base(filepath.Dir(parent)) == "mayor" {
+			return filepath.Dir(filepath.Dir(filepath.Dir(parent)))
+		}
+		return filepath.Dir(parent)
+	}
+	return filepath.Dir(beadsDir)
 }
 
 func issuePrefixForRigInit(townRoot, rigName string) string {

@@ -2291,6 +2291,15 @@ func TestInitRigSeedsIssuePrefixEmbedded(t *testing.T) {
 	if _, err := exec.LookPath("dolt"); err != nil {
 		t.Skip("dolt binary not available")
 	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("free port: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close free port listener: %v", err)
+	}
+	t.Setenv("GT_DOLT_PORT", strconv.Itoa(port))
 
 	townRoot := t.TempDir()
 	beadsDir := filepath.Join(townRoot, ".beads")
