@@ -368,7 +368,7 @@ func routedBeadExistsForTargetRig(beadID, targetRig, townRoot string) bool {
 	if prefixRig != targetRig {
 		return false
 	}
-	out, err := bdShowBeadRoutedCmd(beadID).Stderr(io.Discard).Output()
+	out, err := bdShowBeadRoutedCmdFromTownRoot(townRoot, beadID).Stderr(io.Discard).Output()
 	return err == nil && len(strings.TrimSpace(string(out))) > 0
 }
 
@@ -1293,6 +1293,7 @@ func hookBeadWithRetryWithTownRoot(beadID, targetAgent, hookDir, townRoot string
 }
 
 var hookBeadWithRetryFn = hookBeadWithRetry
+var hookBeadWithRetryWithTownRootFn = hookBeadWithRetryWithTownRoot
 
 // slingBackoff calculates exponential backoff with ±25% jitter for a given attempt (1-indexed).
 // Formula: base * 2^(attempt-1) * (1 ± 25% random), capped at max.

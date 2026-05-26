@@ -338,7 +338,7 @@ func executeSling(params SlingParams) (*SlingResult, error) {
 	}
 	defer assigneeUnlock()
 	hookDir := beads.ResolveHookDir(townRoot, beadToHook, hookWorkDir)
-	if err := hookBeadWithRetryWithTownRoot(beadToHook, targetAgent, hookDir, townRoot); err != nil {
+	if err := hookBeadWithRetryWithTownRootFn(beadToHook, targetAgent, hookDir, townRoot); err != nil {
 		// Clean up orphaned polecat to avoid leaving spawned-but-unhookable polecats
 		cleanupSpawnedPolecat(spawnInfo, params.RigName, convoyID)
 		result.ErrMsg = "hook failed"
