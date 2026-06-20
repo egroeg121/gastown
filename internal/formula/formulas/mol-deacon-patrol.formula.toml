@@ -500,32 +500,38 @@ Fire notifications for convoy and cross-rig events.
 After convoy completion or cross-rig dependency resolution, notify relevant parties.
 
 **Convoy completion notifications:**
-When a convoy closes (all tracked issues done), notify the Overseer:
+When a convoy closes (all tracked issues done), notify the Overseer.
+Use nudge — this is routine status, not an actionable escalation:
 ```bash
 # Convoy gt-convoy-xxx just completed
-gt mail send mayor/ -s "Convoy complete: <convoy-title>" \\
-  -m "Convoy <id> has completed. All tracked issues closed.
-      Duration: <start to end>
-      Issues: <count>
-
-      Summary: <brief description of what was accomplished>"
+gt nudge mayor --stdin <<'EOF'
+Convoy complete: <convoy-title>
+Convoy <id> has completed. All tracked issues closed.
+Duration: <start to end>
+Issues: <count>
+Summary: <brief description of what was accomplished>
+EOF
 ```
 
 **Cross-rig resolution notifications:**
-When a cross-rig dependency resolves, notify the affected rig:
+When a cross-rig dependency resolves, notify the affected rig.
+Use nudge — routine operational awareness, no need to persist as a bead:
 ```bash
 # Issue bd-xxx closed, unblocking gt-yyy
-gt mail send gastown/witness -s "Dependency resolved: <bd-xxx>" \\
-  -m "External dependency bd-xxx has closed.
-      Unblocked: gt-yyy (<title>)
-      This issue may now proceed."
+gt nudge gastown/witness --stdin <<'EOF'
+Dependency resolved: <bd-xxx>
+External dependency bd-xxx has closed.
+Unblocked: gt-yyy (<title>)
+This issue may now proceed.
+EOF
 ```
 
 **Notification targets:**
-- Convoy complete → mayor/ (for strategic visibility)
+- Convoy complete → mayor (for strategic visibility)
 - Cross-rig dep resolved → <rig>/witness (for operational awareness)
 
-Keep notifications brief and actionable. The recipient can run bd show for details."""
+Keep notifications brief and actionable. Reference the relevant bead ID so the
+recipient can run bd show for details."""
 
 [[steps]]
 id = "heartbeat-mid"
@@ -875,9 +881,9 @@ For dogs working > timeout:
 # Option A: File death warrant (Boot handles termination)
 gt warrant file deacon/dogs/<name> --reason "Stuck: working on <work> for <duration>"
 
-# Option B: Force clear work and notify
+# Option B: Force clear work and notify (nudge — routine status, self-addressed)
 gt dog clear <name> --force
-gt mail send deacon/ -s "DOG_TIMEOUT <name>" -m "Dog <name> timed out on <work> after <duration>"
+gt nudge deacon "DOG_TIMEOUT <name>: dog timed out on <work> after <duration>"
 ```
 
 **Decision matrix:**

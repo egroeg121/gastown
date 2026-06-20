@@ -225,10 +225,9 @@ Mark as read. The work will be processed in queue-scan/process-branch.
 **Do NOT archive yet** - archive after merge/reject decision in merge-push step.
 
 **PATROL: Wake up**:
-Witness detected MRs waiting but refinery idle. Acknowledge and archive:
-```bash
-gt mail archive <message-id>
-```
+Witness detected MRs waiting but refinery idle. This now arrives as a nudge
+(inline in your prompt stream) plus a file event, not mail — there is nothing
+to archive. Just proceed to queue-scan and process the waiting MRs.
 
 **HELP / Blocked**:
 Assess and respond. If you can't help, escalate to Mayor.
@@ -743,21 +742,33 @@ If merge fails (conflict, branch protection), debug and retry.
 
 **Step 2: Send MERGED Notification (REQUIRED - DO THIS IMMEDIATELY)**
 
-RIGHT NOW, before any cleanup, send MERGED mail to Witness.
+RIGHT NOW, before any cleanup, nudge MERGED to the Witness.
+
+**Why nudge, not mail:** MERGED is a routine lifecycle signal sent once per
+merge. As mail it creates a permanent bead + Dolt commit every cycle (a major
+source of hq swimlane pollution). A nudge delivers the same signal with zero
+bead cost. The Witness's cleanup-wisp closing is best-effort, and the Witness
+also rediscovers merges via `gt patrol scan`, so a dropped nudge is non-fatal.
 
 **If merge_strategy = "direct":**
 ```bash
-gt mail send <rig>/witness -s "MERGED <polecat-name>" -m "Branch: <branch>
+gt nudge <rig>/witness --stdin <<EOF
+MERGED <polecat-name>
+Branch: <branch>
 Issue: <issue-id>
-Merged-At: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+Merged-At: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
 ```
 
 **If merge_strategy = "pr":**
 ```bash
-gt mail send <rig>/witness -s "MERGED <polecat-name>" -m "Branch: <branch>
+gt nudge <rig>/witness --stdin <<EOF
+MERGED <polecat-name>
+Branch: <branch>
 Issue: <issue-id>
 PR: ${PR_URL}
-Merged-At: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+Merged-At: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
 ```
 
 Note: In PR mode, MERGED is only sent AFTER `gh pr merge` succeeds — the PR
