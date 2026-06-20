@@ -57,7 +57,7 @@ gt plugin record-run --plugin rebuild-gt --result skipped --rig gastown \
 Before building, verify the source repo is clean and on main:
 
 ```bash
-cd "$GT_TOWN_ROOT"/gastown/refinery/rig
+cd "$(gt town root)/gastown/refinery/rig"
 git status --porcelain  # Must be clean
 git branch --show-current  # Must be "main"
 ```
@@ -70,7 +70,7 @@ Rebuild from source (the refinery/rig worktree is the canonical source; it
 tracks origin=egroeg121/gastown with upstream=gastownhall/gastown):
 
 ```bash
-cd "$GT_TOWN_ROOT"/gastown/refinery/rig && make build && make safe-install
+cd "$(gt town root)/gastown/refinery/rig" && make build && make safe-install
 ```
 
 **IMPORTANT**: Use `make safe-install` (not `make install`) to avoid restarting
