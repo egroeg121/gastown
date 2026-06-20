@@ -8,7 +8,9 @@
 set -euo pipefail
 
 TOWN_ROOT="${GT_TOWN_ROOT:-$(gt town root 2>/dev/null)}"
-RIG_ROOT="${TOWN_ROOT}/gastown/mayor/rig"
+# GT_GASTOWN_SOURCE_DIR: override to use a different build source.
+# Default: ~/code/gastown (standalone fork clone with the gastown Go source).
+RIG_ROOT="${GT_GASTOWN_SOURCE_DIR:-${HOME}/code/gastown}"
 
 log() { echo "[rebuild-gt] $*"; }
 
