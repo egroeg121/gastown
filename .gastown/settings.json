@@ -1,0 +1,18 @@
+{
+    "_comment": "Committed repo-floor rig settings for gastown. Read by both the sling/formula path (loadRigCommandVars) and the refinery (Engineer.LoadConfig). Operator tuning in <town>/<rig>/config.json overrides these.",
+    "type": "rig-settings",
+    "version": 1,
+
+    "merge_queue": {
+        "enabled": true,
+        "run_tests": true,
+        "build_command": "go build ./cmd/gt",
+        "test_command": "go test -short -timeout=10m ./...",
+        "lint_command": "golangci-lint run ./...",
+        "gates": {
+            "build": {"cmd": "go build ./cmd/gt", "timeout": "3m"},
+            "test": {"cmd": "go test -short -timeout=10m ./...", "timeout": "12m"},
+            "lint": {"cmd": "golangci-lint run ./...", "timeout": "3m"}
+        }
+    }
+}
