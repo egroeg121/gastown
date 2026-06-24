@@ -360,6 +360,9 @@ func runMoleculeStatus(cmd *cobra.Command, args []string) error {
 	if err := ensureRoleWorktreeIntegrity(cwd, townRoot, validationRole); err != nil {
 		return err
 	}
+	if err := ensureRoleWorktreeIntegrity(cwd, townRoot, roleCtx.Role); err != nil {
+		return err
+	}
 
 	// Find beads directory.
 	// First try CWD-based discovery, then resolve to the correct rig database

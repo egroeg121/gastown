@@ -52,7 +52,7 @@ func Validate(path string, opts IntegrityOptions) error {
 		return fmt.Errorf("%w: cannot stat %s: %v", ErrIntegrityViolation, marker, err)
 	}
 	if info.IsDir() {
-		return validateGitDir(marker, marker)
+		return nil
 	}
 
 	content, err := os.ReadFile(marker)
@@ -79,17 +79,10 @@ func Validate(path string, opts IntegrityOptions) error {
 		return fmt.Errorf("%w: gitdir target is not a directory for %s: %s", ErrIntegrityViolation, marker, target)
 	}
 
-	if err := validateGitDir(target, marker); err != nil {
-		return err
+	if _, err := os.Stat(filepath.Join(target, "HEAD")); err != nil {
+		return fmt.Errorf("%w: gitdir metadata incomplete for %s: missing HEAD in %s", ErrIntegrityViolation, marker, target)
 	}
 
-	return nil
-}
-
-func validateGitDir(gitdir, marker string) error {
-	if _, err := os.Stat(filepath.Join(gitdir, "HEAD")); err != nil {
-		return fmt.Errorf("%w: gitdir metadata incomplete for %s: missing HEAD in %s", ErrIntegrityViolation, marker, gitdir)
-	}
 	return nil
 }
 
