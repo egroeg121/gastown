@@ -1698,9 +1698,19 @@ func TestSendKeysLiteralWithRetry_ImmediateSuccess(t *testing.T) {
 	tm := newTestTmux(t)
 	sessionName := "gt-test-retry-ok-" + fmt.Sprintf("%d", time.Now().UnixNano()%10000)
 
-	// Create a session that's ready to accept input
-	if err := tm.NewSession(sessionName, os.TempDir()); err != nil {
-		t.Fatalf("NewSession: %v", err)
+	// Create a session that's ready to accept input. The isolated test tmux
+	// server can briefly disappear between tests; that is unrelated to the
+	// send-keys retry path this test covers.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := tm.NewSession(sessionName, os.TempDir())
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, ErrNoServer) || time.Now().After(deadline) {
+			t.Fatalf("NewSession: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	defer func() { _ = tm.KillSession(sessionName) }()
 
