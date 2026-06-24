@@ -840,3 +840,121 @@ func TestCreatePolecatCLAUDEmd_GitCleanScenario(t *testing.T) {
 		t.Fatal("gt done instructions not found after re-creation")
 	}
 }
+
+func TestRenderRole_Architect(t *testing.T) {
+	tmpl, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	data := RoleData{
+		Role:          "architect",
+		RigName:       "myrig",
+		TownRoot:      "/test/town",
+		TownName:      "town",
+		WorkDir:       "/test/town/myrig/architect",
+		DefaultBranch: "main",
+		IssuePrefix:   "mr",
+		MayorSession:  "gt-town-mayor",
+		DeaconSession: "gt-town-deacon",
+	}
+
+	output, err := tmpl.RenderRole("architect", data)
+	if err != nil {
+		t.Fatalf("RenderRole() error = %v", err)
+	}
+
+	if !strings.Contains(output, "Architect Context") {
+		t.Error("output missing 'Architect Context'")
+	}
+	if !strings.Contains(output, "myrig") {
+		t.Error("output missing rig name")
+	}
+	if !strings.Contains(output, "do NOT write implementation code") {
+		t.Error("output missing the no-code mandate")
+	}
+	if !strings.Contains(output, "docs/design/") {
+		t.Error("output missing docs/design/ responsibility")
+	}
+	if strings.Contains(output, "{{") {
+		t.Error("output contains unrendered template directives")
+	}
+}
+
+func TestRenderRole_Engineer(t *testing.T) {
+	tmpl, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	data := RoleData{
+		Role:          "engineer",
+		RigName:       "myrig",
+		TownRoot:      "/test/town",
+		TownName:      "town",
+		WorkDir:       "/test/town/myrig/engineer",
+		DefaultBranch: "main",
+		IssuePrefix:   "mr",
+		MayorSession:  "gt-town-mayor",
+		DeaconSession: "gt-town-deacon",
+	}
+
+	output, err := tmpl.RenderRole("engineer", data)
+	if err != nil {
+		t.Fatalf("RenderRole() error = %v", err)
+	}
+
+	if !strings.Contains(output, "Engineer Context") {
+		t.Error("output missing 'Engineer Context'")
+	}
+	if !strings.Contains(output, "myrig") {
+		t.Error("output missing rig name")
+	}
+	if !strings.Contains(output, "mr-*") {
+		t.Error("output missing issue-prefix bug bead reference")
+	}
+	if !strings.Contains(output, "do NOT build features") {
+		t.Error("output missing the no-features mandate")
+	}
+	if strings.Contains(output, "{{") {
+		t.Error("output contains unrendered template directives")
+	}
+}
+
+func TestRenderRole_Accountant(t *testing.T) {
+	tmpl, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	data := RoleData{
+		Role:          "accountant",
+		TownRoot:      "/test/town",
+		TownName:      "town",
+		WorkDir:       "/test/town/accountant",
+		DefaultBranch: "main",
+		MayorSession:  "gt-town-mayor",
+		DeaconSession: "gt-town-deacon",
+	}
+
+	output, err := tmpl.RenderRole("accountant", data)
+	if err != nil {
+		t.Fatalf("RenderRole() error = %v", err)
+	}
+
+	if !strings.Contains(output, "Accountant Context") {
+		t.Error("output missing 'Accountant Context'")
+	}
+	if !strings.Contains(output, "/test/town/.dolt-data/dolt.pid") {
+		t.Error("output missing town-rooted dolt pid path")
+	}
+	if !strings.Contains(output, "do NOT write product code") {
+		t.Error("output missing the no-code mandate")
+	}
+	if !strings.Contains(output, "dolt cleanup") {
+		t.Error("output missing safe orphan cleanup command")
+	}
+	if strings.Contains(output, "{{") {
+		t.Error("output contains unrendered template directives")
+	}
+}
