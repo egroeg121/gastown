@@ -895,11 +895,11 @@ func TestParseFreshBranchName_Rejects(t *testing.T) {
 		"master",
 		"develop",
 		"feature/x",
-		"polecat/",          // empty tail
-		"polecat/alpha",     // no ts or issue
-		"polecat/alpha-",    // trailing dash, no ts
-		"polecat//gt-abc@1", // empty polecat name
-		"polecat/alpha/@1",  // empty issue
+		"polecat/",              // empty tail
+		"polecat/alpha",         // no ts or issue
+		"polecat/alpha-",        // trailing dash, no ts
+		"polecat//gt-abc@1",     // empty polecat name
+		"polecat/alpha/@1",      // empty issue
 		"polecat/alpha/gt-abc@", // empty ts
 		"",
 	}
@@ -907,6 +907,20 @@ func TestParseFreshBranchName_Rejects(t *testing.T) {
 		if meta := parseFreshBranchName(b); meta.ok {
 			t.Errorf("parseFreshBranchName(%q) = %+v, want ok=false", b, meta)
 		}
+	}
+}
+
+func TestParseFreshBranchName_LegacyIssueBranch(t *testing.T) {
+	branch := "polecat/furiosa/au-yxn"
+	meta := parseFreshBranchName(branch)
+	if !meta.ok {
+		t.Fatalf("parseFreshBranchName(%q) not ok", branch)
+	}
+	if meta.polecat != "furiosa" {
+		t.Errorf("polecat = %q, want furiosa", meta.polecat)
+	}
+	if meta.issue != "au-yxn" {
+		t.Errorf("issue = %q, want au-yxn", meta.issue)
 	}
 }
 
@@ -942,8 +956,22 @@ func TestShouldCreateFreshSessionBranch_Structural(t *testing.T) {
 			want:            false,
 		},
 		{
+			name:            "legacy same-issue respawn preserves branch",
+			currentBranch:   "polecat/alpha/gt-abc",
+			issue:           "gt-abc",
+			canonicalBranch: "main",
+			want:            false,
+		},
+		{
 			name:            "other-issue polecat branch triggers fresh",
 			currentBranch:   "polecat/alpha/gt-999@xyz",
+			issue:           "gt-abc",
+			canonicalBranch: "main",
+			want:            true,
+		},
+		{
+			name:            "legacy other-issue polecat branch triggers fresh",
+			currentBranch:   "polecat/alpha/gt-999",
 			issue:           "gt-abc",
 			canonicalBranch: "main",
 			want:            true,

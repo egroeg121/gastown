@@ -177,6 +177,7 @@ func (m *SessionManager) clonePath(polecat string) string {
 // freshBranchName returns a unique branch name for a new polecat session.
 // Mirrors the naming convention in Manager.buildBranchName:
 //   - polecat/<name>/<issue>@<timestamp> when an issue is known
+//   - polecat/<name>/<issue> for legacy issue-scoped branches
 //   - polecat/<name>-<timestamp> otherwise
 //
 // parseFreshBranchName is the structural inverse.
@@ -197,9 +198,9 @@ type freshBranchMeta struct {
 }
 
 // parseFreshBranchName is the structural inverse of freshBranchName. It
-// does not consult git or the filesystem; it recognizes the two formats
-// the formatter emits. Used in place of substring heuristics so that
-// branch-naming changes can be made in a single place.
+// does not consult git or the filesystem; it recognizes the emitted formats
+// plus legacy issue-scoped branches. Used in place of substring heuristics so
+// that branch-naming changes can be made in a single place.
 func parseFreshBranchName(branch string) freshBranchMeta {
 	const prefix = "polecat/"
 	if !strings.HasPrefix(branch, prefix) {
@@ -207,14 +208,20 @@ func parseFreshBranchName(branch string) freshBranchMeta {
 	}
 	rest := branch[len(prefix):]
 	if slash := strings.Index(rest, "/"); slash >= 0 {
-		// polecat/<name>/<issue>@<ts>
+		// polecat/<name>/<issue>@<ts>, or legacy polecat/<name>/<issue>.
 		if slash == 0 {
 			return freshBranchMeta{}
 		}
 		name := rest[:slash]
 		tail := rest[slash+1:]
+		if tail == "" {
+			return freshBranchMeta{}
+		}
 		at := strings.LastIndex(tail, "@")
-		if at <= 0 || at == len(tail)-1 {
+		if at < 0 {
+			return freshBranchMeta{polecat: name, issue: tail, ok: true}
+		}
+		if at == 0 || at == len(tail)-1 {
 			return freshBranchMeta{}
 		}
 		return freshBranchMeta{polecat: name, issue: tail[:at], ok: true}
