@@ -365,7 +365,11 @@ func (t *Tmux) NewSessionWithCommand(name, workDir, command string) error {
 		}
 	}
 
-	return t.checkSessionAfterCreate(name, command)
+	if err := t.checkSessionAfterCreate(name, command); err != nil {
+		return err
+	}
+	t.WakePaneIfDetached(name)
+	return nil
 }
 
 // NewSessionWithCommandAndEnv creates a new detached tmux session with environment
@@ -445,7 +449,11 @@ func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env ma
 		}
 	}
 
-	return t.checkSessionAfterCreate(name, command)
+	if err := t.checkSessionAfterCreate(name, command); err != nil {
+		return err
+	}
+	t.WakePaneIfDetached(name)
+	return nil
 }
 
 // checkSessionAfterCreate verifies that a newly created session's command didn't

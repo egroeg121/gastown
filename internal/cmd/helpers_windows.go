@@ -21,6 +21,11 @@ func attachToTmuxSession(sessionID string) error {
 		return fmt.Errorf("tmux not found: %w", err)
 	}
 
+	// Some Ink-style TUIs can miss stdin after starting in a detached tmux
+	// session until they receive a terminal event. Wake before attaching so
+	// interactive sessions can accept keyboard input immediately.
+	tmux.NewTmux().WakePaneIfDetached(sessionID)
+
 	// Base args with UTF-8 and socket support
 	var args []string
 	args = append(args, "-u")
