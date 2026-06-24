@@ -154,3 +154,4 @@ func TestRigConfigSet_WispLayerWarning(t *testing.T) {
 		}
 	})
 }
+
