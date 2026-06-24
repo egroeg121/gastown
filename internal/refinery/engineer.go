@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/gastown/internal/beads"
+	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/crew"
 	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/git"
@@ -311,16 +312,52 @@ func (e *Engineer) SetOutput(w io.Writer) {
 	e.output = w
 }
 
-// LoadConfig loads merge queue configuration from the rig's config.json.
+// LoadConfig loads merge queue configuration for the rig.
+//
+// Configuration is layered with the same precedence the sling path uses
+// (see loadRigCommandVars): the committed repo floor is applied first, then
+// the operator-controlled town config.json overrides it. This keeps a single
+// source of truth — a rig that declares its gates in the committed
+// .gastown/settings.json gets those gates enforced by the refinery even when
+// no town-local config.json exists. Without this, non-pre-verified MRs would
+// slip through ungated whenever the operator hadn't hand-copied gate commands
+// into the town config.
 func (e *Engineer) LoadConfig() error {
-	configPath := filepath.Join(e.rig.Path, "config.json")
-	data, err := os.ReadFile(configPath)
+	// Layer 1 (floor): repo-committed settings checked out in the refinery's
+	// working tree. e.workDir is refinery/rig (or mayor/rig fallback) — the
+	// same checkout the gates run against.
+	repoFloor := filepath.Join(e.workDir, config.RepoSettingsPath)
+	if err := e.applyMergeQueueConfigFile(repoFloor); err != nil {
+		return err
+	}
+
+	// Layer 2 (override): operator-controlled town rig config.
+	townConfig := filepath.Join(e.rig.Path, "config.json")
+	if err := e.applyMergeQueueConfigFile(townConfig); err != nil {
+		return err
+	}
+
+	// Initialize the PR provider when merge_strategy=pr.
+	if e.config.MergeStrategy == "pr" {
+		if err := e.initPRProvider(); err != nil {
+			return fmt.Errorf("initializing PR provider: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// applyMergeQueueConfigFile reads a config file, extracts its merge_queue
+// section, and overlays any explicitly-set fields onto e.config. A missing
+// file is not an error (the layer simply contributes nothing). Fields absent
+// from the file preserve whatever the previous layer (or the default) set.
+func (e *Engineer) applyMergeQueueConfigFile(configPath string) error {
+	data, err := os.ReadFile(configPath) //nolint:gosec // G304: path built from trusted rig config locations.
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Use defaults if no config file
 			return nil
 		}
-		return fmt.Errorf("reading config: %w", err)
+		return fmt.Errorf("reading config %s: %w", configPath, err)
 	}
 
 	// Parse config file to extract merge_queue section
@@ -328,11 +365,11 @@ func (e *Engineer) LoadConfig() error {
 		MergeQueue json.RawMessage `json:"merge_queue"`
 	}
 	if err := json.Unmarshal(data, &rawConfig); err != nil {
-		return fmt.Errorf("parsing config: %w", err)
+		return fmt.Errorf("parsing config %s: %w", configPath, err)
 	}
 
 	if rawConfig.MergeQueue == nil {
-		// No merge_queue section, use defaults
+		// No merge_queue section in this layer.
 		return nil
 	}
 
@@ -440,13 +477,6 @@ func (e *Engineer) LoadConfig() error {
 	}
 	if mqRaw.RequireReview != nil {
 		e.config.RequireReview = mqRaw.RequireReview
-	}
-
-	// Initialize the PR provider when merge_strategy=pr.
-	if e.config.MergeStrategy == "pr" {
-		if err := e.initPRProvider(); err != nil {
-			return fmt.Errorf("initializing PR provider: %w", err)
-		}
 	}
 
 	return nil

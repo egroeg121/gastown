@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Refinery now enforces gates declared in the committed repo floor**
+  (`.gastown/settings.json`) — `Engineer.LoadConfig` previously read only the
+  town-local `<rig>/config.json`, so a rig that declared its `test`/`lint`/
+  `build` gates in its committed `.gastown/settings.json` (the floor the
+  sling/formula path already reads) had those gates silently ignored by the
+  refinery. Non-pre-verified MRs could merge ungated. `LoadConfig` now layers
+  the repo floor first and the town config as an override, matching the
+  sling-path precedence (`loadRigCommandVars`). Added a committed
+  `.gastown/settings.json` for gastown wiring `go build`/`go test`/
+  `golangci-lint` gates (hq-h9d4).
+
 ## [1.2.1] - 2026-06-06
 
 ### Fixed

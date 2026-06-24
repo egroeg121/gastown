@@ -247,6 +247,108 @@ func TestEngineer_LoadConfig_WithMergeQueue(t *testing.T) {
 	}
 }
 
+// writeRepoFloor writes a .gastown/settings.json repo floor into the refinery's
+// working tree (mayor/rig fallback) under rigPath.
+func writeRepoFloor(t *testing.T, rigPath string, mq map[string]interface{}) {
+	t.Helper()
+	floorDir := filepath.Join(rigPath, "mayor", "rig", ".gastown")
+	if err := os.MkdirAll(floorDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	settings := map[string]interface{}{
+		"type":        "rig-settings",
+		"version":     1,
+		"merge_queue": mq,
+	}
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(filepath.Join(floorDir, "settings.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestEngineer_LoadConfig_RepoFloorGates verifies that gates declared in the
+// committed repo floor (.gastown/settings.json) are enforced by the refinery
+// even when no town-level config.json exists. This is the core wiring that
+// blocks ungated merges (hq-h9d4).
+func TestEngineer_LoadConfig_RepoFloorGates(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "engineer-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	writeRepoFloor(t, tmpDir, map[string]interface{}{
+		"test_command": "make test",
+		"gates": map[string]interface{}{
+			"test": map[string]interface{}{"cmd": "go test ./...", "timeout": "5m"},
+		},
+	})
+
+	r := &rig.Rig{Name: "test-rig", Path: tmpDir}
+	e := NewEngineer(r)
+
+	if err := e.LoadConfig(); err != nil {
+		t.Fatalf("unexpected error loading config: %v", err)
+	}
+
+	if e.config.TestCommand != "make test" {
+		t.Errorf("expected TestCommand from repo floor 'make test', got %q", e.config.TestCommand)
+	}
+	gate, ok := e.config.Gates["test"]
+	if !ok {
+		t.Fatalf("expected 'test' gate from repo floor, got gates: %v", e.config.Gates)
+	}
+	if gate.Cmd != "go test ./..." {
+		t.Errorf("expected gate cmd 'go test ./...', got %q", gate.Cmd)
+	}
+	if gate.Timeout != 5*time.Minute {
+		t.Errorf("expected gate timeout 5m, got %v", gate.Timeout)
+	}
+}
+
+// TestEngineer_LoadConfig_TownOverridesRepoFloor verifies precedence: the
+// operator-controlled town config.json overrides the committed repo floor,
+// matching the sling path's repo-floor → local-override layering.
+func TestEngineer_LoadConfig_TownOverridesRepoFloor(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "engineer-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	writeRepoFloor(t, tmpDir, map[string]interface{}{
+		"test_command":   "floor test",
+		"max_concurrent": 1,
+	})
+
+	town := map[string]interface{}{
+		"type": "rig", "version": 1, "name": "test-rig",
+		"merge_queue": map[string]interface{}{
+			"test_command": "town test",
+		},
+	}
+	data, _ := json.MarshalIndent(town, "", "  ")
+	if err := os.WriteFile(filepath.Join(tmpDir, "config.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &rig.Rig{Name: "test-rig", Path: tmpDir}
+	e := NewEngineer(r)
+
+	if err := e.LoadConfig(); err != nil {
+		t.Fatalf("unexpected error loading config: %v", err)
+	}
+
+	// Town config wins for test_command...
+	if e.config.TestCommand != "town test" {
+		t.Errorf("expected town override 'town test', got %q", e.config.TestCommand)
+	}
+	// ...but fields only set in the floor survive (town didn't override them).
+	if e.config.MaxConcurrent != 1 {
+		t.Errorf("expected MaxConcurrent 1 from repo floor, got %d", e.config.MaxConcurrent)
+	}
+}
+
 func TestEngineer_LoadConfig_AutoPushDisabled(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "engineer-test-*")
 	if err != nil {
