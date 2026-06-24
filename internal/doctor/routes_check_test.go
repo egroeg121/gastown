@@ -42,6 +42,9 @@ func TestRoutesCheck_MissingTownRoute(t *testing.T) {
 		if result.Message != "Required town routes are missing" {
 			t.Errorf("expected 'Required town routes are missing', got %s", result.Message)
 		}
+		if strings.Contains(result.FixHint, "Repair routes.jsonl") {
+			t.Errorf("expected auto-fix hint for well-formed routes, got %q", result.FixHint)
+		}
 	})
 
 	t.Run("passes when town root route exists", func(t *testing.T) {
@@ -605,7 +608,6 @@ func TestRoutesCheck_SuboptimalRoutes(t *testing.T) {
 	})
 }
 
-
 func TestRoutesCheck_CorruptedRoutesJsonl(t *testing.T) {
 	t.Run("corrupted routes.jsonl results in empty routes", func(t *testing.T) {
 		tmpDir := t.TempDir()
@@ -631,17 +633,18 @@ func TestRoutesCheck_CorruptedRoutesJsonl(t *testing.T) {
 		ctx := &CheckContext{TownRoot: tmpDir}
 		result := check.Run(ctx)
 
-		// Corrupted/malformed lines are skipped, resulting in empty routes
-		// This triggers the "Required town routes are missing" warning
 		if result.Status != StatusWarning {
 			t.Errorf("expected StatusWarning, got %v: %s", result.Status, result.Message)
 		}
-		if result.Message != "Required town routes are missing" {
-			t.Errorf("expected 'Required town routes are missing', got %s", result.Message)
+		if !strings.Contains(result.Message, "malformed route definition") {
+			t.Errorf("expected malformed route warning, got %s", result.Message)
+		}
+		if !detailsContain(result.Details, "malformed JSON") {
+			t.Errorf("expected malformed JSON detail, got %v", result.Details)
 		}
 	})
 
-	t.Run("fix regenerates corrupted routes.jsonl with town route", func(t *testing.T) {
+	t.Run("fix refuses corrupted routes.jsonl", func(t *testing.T) {
 		tmpDir := t.TempDir()
 
 		// Create .beads directory with corrupted routes.jsonl
@@ -664,28 +667,178 @@ func TestRoutesCheck_CorruptedRoutesJsonl(t *testing.T) {
 		check := NewRoutesCheck()
 		ctx := &CheckContext{TownRoot: tmpDir}
 
-		// Run fix
-		if err := check.Fix(ctx); err != nil {
-			t.Fatalf("Fix failed: %v", err)
-		}
-
-		// Verify routes.jsonl now contains both hq- and hq-cv- routes
-		content, err := os.ReadFile(routesPath)
-		if err != nil {
-			t.Fatalf("Failed to read routes.jsonl: %v", err)
-		}
-
-		contentStr := string(content)
-		if contentStr != `{"prefix":"hq-","path":"."}
-{"prefix":"hq-cv-","path":"."}
-` {
-			t.Errorf("unexpected routes.jsonl content after fix: %s", contentStr)
-		}
-
-		// Verify the check now passes
-		result := check.Run(ctx)
-		if result.Status != StatusOK {
-			t.Errorf("expected StatusOK after fix, got %v: %s", result.Status, result.Message)
+		if err := check.Fix(ctx); err == nil || !strings.Contains(err.Error(), "repair manually") {
+			t.Fatalf("expected manual repair error, got %v", err)
 		}
 	})
+}
+
+func TestRoutesCheck_RouteShapeValidation(t *testing.T) {
+	setup := func(t *testing.T, routesContent string) string {
+		t.Helper()
+		tmpDir := t.TempDir()
+		beadsDir := filepath.Join(tmpDir, ".beads")
+		if err := os.MkdirAll(beadsDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(tmpDir, "mayor"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(tmpDir, "gastown", "mayor", "rig", ".beads"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(beadsDir, "routes.jsonl"), []byte(routesContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return tmpDir
+	}
+
+	baseRoutes := `{"prefix":"hq-","path":"."}
+{"prefix":"hq-cv-","path":"."}
+`
+
+	tests := []struct {
+		name    string
+		route   string
+		details []string
+	}{
+		{
+			name:    "malformed JSON",
+			route:   "not valid json\n",
+			details: []string{"malformed JSON"},
+		},
+		{
+			name:    "empty prefix",
+			route:   `{"prefix":"","path":"gastown/mayor/rig"}` + "\n",
+			details: []string{"empty prefix"},
+		},
+		{
+			name:    "empty path",
+			route:   `{"prefix":"gt-","path":""}` + "\n",
+			details: []string{"empty path"},
+		},
+		{
+			name:    "prefix missing hyphen",
+			route:   `{"prefix":"gt","path":"gastown/mayor/rig"}` + "\n",
+			details: []string{"must end in '-"},
+		},
+		{
+			name:    "absolute path",
+			route:   `{"prefix":"gt-","path":"/outside"}` + "\n",
+			details: []string{"must be relative"},
+		},
+		{
+			name:    "path traversal",
+			route:   `{"prefix":"gt-","path":"../outside"}` + "\n",
+			details: []string{"escapes town root"},
+		},
+		{
+			name:    "non-clean path",
+			route:   `{"prefix":"gt-","path":"gastown/./mayor/rig"}` + "\n",
+			details: []string{"is not clean"},
+		},
+		{
+			name: "duplicate non-town path",
+			route: `{"prefix":"gt-","path":"gastown/mayor/rig"}
+{"prefix":"ga-","path":"gastown/mayor/rig"}
+`,
+			details: []string{"also used by prefix"},
+		},
+		{
+			name: "duplicate prefix",
+			route: `{"prefix":"gt-","path":"gastown/mayor/rig"}
+{"prefix":"gt-","path":"gastown/mayor/rig"}
+`,
+			details: []string{"duplicates prefix"},
+		},
+		{
+			name:    "non-town prefix to town root",
+			route:   `{"prefix":"gt-","path":"."}` + "\n",
+			details: []string{"non-town prefix", "town root"},
+		},
+		{
+			name:    "town prefix away from town root",
+			route:   `{"prefix":"hq-","path":"gastown/mayor/rig"}` + "\n",
+			details: []string{"town prefix", "away from town root"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			check := NewRoutesCheck()
+			ctx := &CheckContext{TownRoot: setup(t, baseRoutes+tt.route)}
+			result := check.Run(ctx)
+
+			if result.Status != StatusWarning {
+				t.Fatalf("expected StatusWarning, got %v: %s", result.Status, result.Message)
+			}
+			for _, want := range tt.details {
+				if !detailsContain(result.Details, want) {
+					t.Fatalf("expected detail containing %q, got %v", want, result.Details)
+				}
+			}
+			if err := check.Fix(ctx); err == nil || !strings.Contains(err.Error(), "repair manually") {
+				t.Fatalf("expected Fix to require manual repair, got %v", err)
+			}
+		})
+	}
+}
+
+func TestRoutesCheck_TownPrefixDoesNotMaskRigRoute(t *testing.T) {
+	tmpDir := t.TempDir()
+	beadsDir := filepath.Join(tmpDir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "gastown", "mayor", "rig", ".beads"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, "mayor"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	rigsContent := `{
+		"version": 1,
+		"rigs": {
+			"gastown": {
+				"git_url": "https://github.com/example/gastown",
+				"beads": { "prefix": "gt" }
+			}
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "mayor", "rigs.json"), []byte(rigsContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	routesContent := `{"prefix":"hq-","path":"gastown/mayor/rig"}
+{"prefix":"hq-cv-","path":"."}
+`
+	if err := os.WriteFile(filepath.Join(beadsDir, "routes.jsonl"), []byte(routesContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	check := NewRoutesCheck()
+	ctx := &CheckContext{TownRoot: tmpDir}
+	result := check.Run(ctx)
+
+	if result.Status != StatusWarning {
+		t.Fatalf("expected StatusWarning, got %v: %s", result.Status, result.Message)
+	}
+	for _, want := range []string{"town prefix", "away from town root", "Rig 'gastown'"} {
+		if !detailsContain(result.Details, want) {
+			t.Fatalf("expected detail containing %q, got %v", want, result.Details)
+		}
+	}
+	if !strings.Contains(result.FixHint, "Repair routes.jsonl") {
+		t.Fatalf("expected manual repair fix hint, got %q", result.FixHint)
+	}
+}
+
+func detailsContain(details []string, substr string) bool {
+	for _, detail := range details {
+		if strings.Contains(detail, substr) {
+			return true
+		}
+	}
+	return false
 }
