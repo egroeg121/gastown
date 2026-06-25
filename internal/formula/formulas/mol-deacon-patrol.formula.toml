@@ -52,6 +52,7 @@ Abbreviated patrol rules:
 - **fire-notifications**: SKIP.
 - **heartbeat-mid**: SKIP (short cycle doesn't need mid-cycle refresh).
 - **health-scan**: Quick `gt witness status` / `gt refinery status` only. Skip nudges.
+- **pr-review**: Run a quick `gt mail inbox | grep READY_FOR_REVIEW` only. If any are found, process them fully (review must not be deferred); otherwise SKIP.
 - **dolt-health**: SKIP.
 - **zombie-scan**: SKIP.
 - **plugin-run**: SKIP.
@@ -72,7 +73,7 @@ When `await-signal` outputs `EFFORT: full`, run all steps thoroughly (normal mod
 
 The goal: idle cycles should burn ~10% of the tokens a full patrol uses."""
 formula = "mol-deacon-patrol"
-version = 14
+version = 15
 
 [vars]
 [vars.wisp_type]
@@ -638,6 +639,110 @@ gt mail send mayor/ -s "Health: <rig> <component> unresponsive" \\
 ```
 
 Reset unresponsive_cycles to 0 when component responds normally."""
+
+[[steps]]
+id = "pr-review"
+title = "Review PRs ready for review"
+needs = ["health-scan"]
+description = """
+Own the PR review loop. Polecats signal completion by sending a
+`READY_FOR_REVIEW: <issue>` mail to their dispatcher (the Deacon, via the
+`dispatched_by` field) when they run `gt done`. Those signals must not sit
+unreviewed — the Deacon reviews each one and routes it to merge or rework.
+
+**The Deacon owns this. Do not assume the Witness or Mayor will pick it up.**
+
+## Step 1: Find beads ready for review
+
+Two discovery channels — check both:
+
+**Channel A — READY_FOR_REVIEW mail (primary):**
+The `inbox-check` step archives most mail, but READY_FOR_REVIEW messages are
+handled HERE. Look for them:
+```bash
+gt mail inbox | grep READY_FOR_REVIEW
+# For each, read the body — it contains Branch, Issue, and (if a PR exists) PR url:
+gt mail read <message-id>
+```
+
+**Channel B — beads marked ready (backup):**
+Catch any readiness signalled via bead labels/status that lost its mail:
+```bash
+bd list --label=ready-for-review --json
+bd list --status=ready_for_review --json 2>/dev/null   # if the rig models it as a status
+```
+
+Build the set of (issue, rig, PR url-or-branch) tuples to review. If both
+channels are empty, log `PR review: nothing ready` and exit this step.
+
+## Step 2: Elevate to P1 immediately
+
+For each ready bead, raise its priority so it can't languish in the backlog:
+```bash
+bd update <issue> --priority 1
+```
+Do this BEFORE reviewing — the elevation is the cheap guarantee; the review
+may take longer or span cycles.
+
+## Step 3: Review the PR
+
+The rig is derived from the bead prefix (e.g. `gt-*` → gastown). The GitHub
+repo is `egroeg121/<rig>`. Prefer the PR url from the mail body; if only a
+branch is known, find the PR:
+```bash
+gh pr list --repo egroeg121/<rig> --head <branch> --json number,url
+```
+
+Then review:
+```bash
+# CI / checks status — prefer CI over running tests locally
+gh pr checks <pr> --repo egroeg121/<rig>
+# Read the diff
+gh pr diff <pr> --repo egroeg121/<rig>
+# Compare against the bead spec
+bd show <issue>
+```
+
+Assess:
+- **Correctness** — obvious bugs, edge cases, broken logic?
+- **Spec match** — does the diff do what the bead asked, no more, no less?
+- **Scope creep** — unrelated changes that shouldn't be here?
+- **Tests/CI** — are checks green? Is the change tested?
+
+This is a judgment call (ZFC) — read the signals and decide.
+
+## Step 4a: If APPROVED
+
+```bash
+# Comment approval on the PR
+gh pr review <pr> --repo egroeg121/<rig> --approve \
+  --body "Deacon review: approved. Matches spec, CI green."
+# Hook the bead to the rig's refinery for merge
+gt sling <issue> <rig>/refinery
+```
+Note the approval for the patrol digest. The Refinery owns the actual merge.
+
+## Step 4b: If REJECTED
+
+```bash
+# Comment the reason on the PR
+gh pr review <pr> --repo egroeg121/<rig> --request-changes \
+  --body "Deacon review: changes requested. <specific reasons>"
+# Send the bead back to the polecat with rejection notes
+bd update <issue> --status in_progress \
+  --notes "REVIEW REJECTED by deacon: <specific reasons>"
+# Nudge the polecat (queue mode — don't interrupt in-flight work)
+gt nudge --mode=queue <rig>/polecats/<name> \
+  'PR review rejected — see bead notes and address the requested changes.'
+```
+
+After handling each ready bead, archive its READY_FOR_REVIEW mail:
+```bash
+gt mail archive <message-id>
+```
+
+**Exit criteria:** Every ready bead is elevated to P1, reviewed, and routed
+(approved → refinery, or rejected → polecat with notes)."""
 
 [[steps]]
 id = "dolt-health"
@@ -1240,6 +1345,7 @@ After await-signal returns, check the EFFORT directive in the output:
 - orphan-process-cleanup through fire-notifications: SKIP all
 - heartbeat-mid: SKIP
 - health-scan: Quick status checks only, skip nudges
+- pr-review: Quick READY_FOR_REVIEW check only; process any found, else SKIP
 - dolt-health through session-gc: SKIP all
 - wisp-compact through log-maintenance: SKIP all
 - patrol-cleanup: Quick inbox check only
@@ -1258,7 +1364,7 @@ After await-signal returns (either by signal or timeout):
 gt patrol report --summary "<brief summary>" \
   --steps "heartbeat:OK,inbox-check:OK,orphan-process-cleanup:SKIP,..."
 ```
-The --steps flag is REQUIRED. List ALL 26 steps with their actual status.
+The --steps flag is REQUIRED. List ALL 27 steps with their actual status.
 Steps you executed get OK, steps you skipped get SKIP.
 This closes the current patrol wisp and automatically creates a new one.
 4. Hand off immediately so a fresh Deacon session picks up the newly-created
