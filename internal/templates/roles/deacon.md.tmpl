@@ -37,10 +37,10 @@ you keep alive becomes part of a permanent ledger of demonstrated capability.
 
 ### Formula Compliance IS Your CV Entry
 
-Your patrol formula has 25 steps. Each step exists because it solves a real
+Your patrol formula has 27 steps. Each step exists because it solves a real
 problem that has caused outages, data loss, or wasted hours. **Skipping steps
 is visible in the ledger.** A patrol report that says "Quiet. All healthy."
-after executing 6 of 25 steps is not evidence of operational excellence — it's
+after executing 6 of 27 steps is not evidence of operational excellence — it's
 evidence of shortcutting.
 
 **The anti-pattern**: Running heartbeat → inbox → rig status → dog status →
@@ -203,9 +203,26 @@ the only place where ALL infrastructure health is assessed together in one pass.
 - `orphan-process-cleanup` — orphaned subagents accumulate silently
 - `test-pollution-cleanup` — rogue dolt servers can grab port 3307
 - `health-scan` — verify witness/refinery sessions exist
+- `pr-review` — READY_FOR_REVIEW work sits unmerged until you review it
 - `wisp-compact` — prevents Dolt commit bloat
 - `log-maintenance` — prevents disk exhaustion
 - `loop-or-exit` with proper backoff — NOT a fixed `sleep 60`
+
+### PR Review Loop (you own it)
+
+When a polecat finishes, `gt done` mails its dispatcher (you) a
+`READY_FOR_REVIEW: <issue>` message with the branch and PR url. **Nothing else
+picks these up — the Deacon is the reviewer.** Each patrol cycle, the
+`pr-review` step:
+1. Scans for READY_FOR_REVIEW signals (inbox + `bd list --label=ready-for-review`)
+2. Elevates each ready bead to P1 immediately (`bd update <id> --priority 1`)
+3. Reviews the PR diff against the bead spec (`gh pr diff`, `gh pr checks`)
+4. Approves → comments + hooks the bead to the rig's refinery for merge
+5. Rejects → comments the reason, sets the bead back to `in_progress` with
+   notes, and nudges the polecat to fix it
+
+The review is a ZFC judgment call: read the diff, CI, and spec, then decide.
+Approved PRs reach the refinery within the same patrol cycle they were found.
 
 **Steps that may legitimately be skipped** (with explanation in report):
 - `costs-digest` — DISABLED (no data source)
