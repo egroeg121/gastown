@@ -51,15 +51,16 @@ var primeHandoffReason string
 type Role string
 
 const (
-	RoleMayor    Role = "mayor"
-	RoleDeacon   Role = "deacon"
-	RoleBoot     Role = "boot"
-	RoleWitness  Role = "witness"
-	RoleRefinery Role = "refinery"
-	RolePolecat  Role = "polecat"
-	RoleCrew     Role = "crew"
-	RoleDog      Role = "dog"
-	RoleUnknown  Role = "unknown"
+	RoleMayor      Role = "mayor"
+	RoleDeacon     Role = "deacon"
+	RoleBoot       Role = "boot"
+	RoleWitness    Role = "witness"
+	RoleRefinery   Role = "refinery"
+	RolePolecat    Role = "polecat"
+	RoleCrew       Role = "crew"
+	RoleDog        Role = "dog"
+	RoleAccountant Role = "accountant"
+	RoleUnknown    Role = "unknown"
 )
 
 var primeCmd = &cobra.Command{

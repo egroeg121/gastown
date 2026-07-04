@@ -840,3 +840,44 @@ func TestCreatePolecatCLAUDEmd_GitCleanScenario(t *testing.T) {
 		t.Fatal("gt done instructions not found after re-creation")
 	}
 }
+
+func TestRenderRole_Accountant(t *testing.T) {
+	tmpl, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	data := RoleData{
+		Role:          "accountant",
+		TownRoot:      "/test/town",
+		TownName:      "town",
+		WorkDir:       "/test/town/accountant",
+		DefaultBranch: "main",
+		MayorSession:  "gt-town-mayor",
+		DeaconSession: "gt-town-deacon",
+	}
+
+	output, err := tmpl.RenderRole("accountant", data)
+	if err != nil {
+		t.Fatalf("RenderRole() error = %v", err)
+	}
+
+	if !strings.Contains(output, "Accountant Context") {
+		t.Error("output missing 'Accountant Context'")
+	}
+	if !strings.Contains(output, "/test/town/.dolt-data/dolt.pid") {
+		t.Error("output missing town-rooted dolt pid path")
+	}
+	if !strings.Contains(output, "do NOT write product code") {
+		t.Error("output missing the no-code mandate")
+	}
+	if !strings.Contains(output, "dolt cleanup") {
+		t.Error("output missing safe orphan cleanup command")
+	}
+	if !strings.Contains(output, "CAPACITY_AVAILABLE") {
+		t.Error("output missing capacity signal")
+	}
+	if strings.Contains(output, "{{") {
+		t.Error("output contains unrendered template directives")
+	}
+}
