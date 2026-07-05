@@ -143,6 +143,16 @@ func detectSenderFromRole(role string) string {
 			return fmt.Sprintf("%s/refinery", rig)
 		}
 		return detectSenderFromCwd()
+	case constants.RoleArchitect:
+		if rig != "" {
+			return fmt.Sprintf("%s/architect", rig)
+		}
+		return detectSenderFromCwd()
+	case constants.RoleEngineer:
+		if rig != "" {
+			return fmt.Sprintf("%s/engineer", rig)
+		}
+		return detectSenderFromCwd()
 	case "dog":
 		dogName := os.Getenv("GT_DOG_NAME")
 		if dogName != "" {
@@ -217,6 +227,24 @@ func detectSenderFromCwd() string {
 		}
 	}
 
+	// If in a rig's architect directory, extract address (format: rig/architect)
+	if strings.Contains(cwd, "/architect") {
+		parts := strings.Split(cwd, "/architect")
+		if len(parts) >= 1 {
+			rigName := filepath.Base(parts[0])
+			return fmt.Sprintf("%s/architect", rigName)
+		}
+	}
+
+	// If in a rig's engineer directory, extract address (format: rig/engineer)
+	if strings.Contains(cwd, "/engineer") {
+		parts := strings.Split(cwd, "/engineer")
+		if len(parts) >= 1 {
+			rigName := filepath.Base(parts[0])
+			return fmt.Sprintf("%s/engineer", rigName)
+		}
+	}
+
 	// If in the town's mayor directory
 	if strings.Contains(cwd, "/mayor") {
 		return "mayor"
@@ -271,6 +299,14 @@ func identityFromAgentFile(parsed agentIdentityFile) string {
 	case constants.RoleRefinery:
 		if rig != "" {
 			return fmt.Sprintf("%s/refinery", rig)
+		}
+	case constants.RoleArchitect:
+		if rig != "" {
+			return fmt.Sprintf("%s/architect", rig)
+		}
+	case constants.RoleEngineer:
+		if rig != "" {
+			return fmt.Sprintf("%s/engineer", rig)
 		}
 	case constants.RoleCrew:
 		if rig != "" && name != "" {

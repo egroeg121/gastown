@@ -7,10 +7,12 @@ import (
 
 // knownRoles lists valid second-segment roles in path-style sling targets.
 var knownRoles = map[string]bool{
-	"polecats": true,
-	"crew":     true,
-	"witness":  true,
-	"refinery": true,
+	"polecats":  true,
+	"crew":      true,
+	"witness":   true,
+	"refinery":  true,
+	"architect": true,
+	"engineer":  true,
 }
 
 // ValidateTarget performs lightweight pre-checks on a sling target string,
@@ -43,6 +45,8 @@ func ValidateTarget(target string) error {
 				"  <rig>/crew/<name>      crew worker\n"+
 				"  <rig>/witness          rig witness\n"+
 				"  <rig>/refinery         rig refinery\n"+
+				"  <rig>/architect        rig architect\n"+
+				"  <rig>/engineer         rig engineer\n"+
 				"  deacon/dogs            dog pool\n"+
 				"  mayor                  town mayor",
 				target, i)
@@ -69,8 +73,8 @@ func ValidateTarget(target string) error {
 		role := strings.ToLower(parts[1])
 		if knownRoles[role] {
 			// Known role: apply role-specific constraints.
-			if role == "witness" || role == "refinery" {
-				// Witness and refinery are singleton roles — no sub-agents.
+			if role == "witness" || role == "refinery" || role == "architect" || role == "engineer" {
+				// Witness, refinery, architect, and engineer are singleton roles — no sub-agents.
 				if len(parts) > 2 {
 					return fmt.Errorf("invalid target %q: %s does not have named sub-agents\n"+
 						"Usage: %s/%s", target, role, parts[0], role)
@@ -97,8 +101,10 @@ func ValidateTarget(target string) error {
 				"  %s/crew/<name>      crew worker\n"+
 				"  %s/witness          rig witness\n"+
 				"  %s/refinery         rig refinery\n"+
+				"  %s/architect        rig architect\n"+
+				"  %s/engineer         rig engineer\n"+
 				"Or use just %q to target by name shorthand",
-				target, parts[1], parts[0], parts[0], parts[0], parts[0], parts[0])
+				target, parts[1], parts[0], parts[0], parts[0], parts[0], parts[0], parts[0], parts[0])
 		}
 		// else: 2-segment with unknown role → polecat/crew shorthand, let resolveTarget handle.
 	}

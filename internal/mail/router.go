@@ -316,6 +316,10 @@ func parseGroupAddress(address string) *ParsedGroup {
 		return &ParsedGroup{Type: GroupTypeRole, RoleType: "dog", Original: address}
 	case "refineries":
 		return &ParsedGroup{Type: GroupTypeRole, RoleType: constants.RoleRefinery, Original: address}
+	case "architects":
+		return &ParsedGroup{Type: GroupTypeRole, RoleType: constants.RoleArchitect, Original: address}
+	case "engineers":
+		return &ParsedGroup{Type: GroupTypeRole, RoleType: constants.RoleEngineer, Original: address}
 	case "deacons":
 		return &ParsedGroup{Type: GroupTypeRole, RoleType: constants.RoleDeacon, Original: address}
 	}
@@ -400,7 +404,7 @@ func agentBeadToAddress(bead *agentBead) string {
 	// Scan from right for known role markers
 	for i := len(parts) - 1; i >= 1; i-- {
 		switch parts[i] {
-		case constants.RoleWitness, constants.RoleRefinery:
+		case constants.RoleWitness, constants.RoleRefinery, constants.RoleArchitect, constants.RoleEngineer:
 			// Singleton role: rig is everything before the role
 			rig := strings.Join(parts[:i], "-")
 			return rig + "/" + parts[i]
@@ -454,8 +458,9 @@ func parseRigAgentAddress(bead *agentBead) string {
 		return parseRigAgentAddressFromID(bead.ID)
 	}
 
-	// For singleton roles (witness, refinery), address is rig/role
-	if roleType == constants.RoleWitness || roleType == constants.RoleRefinery {
+	// For singleton roles (witness, refinery, architect, engineer), address is rig/role
+	if roleType == constants.RoleWitness || roleType == constants.RoleRefinery ||
+		roleType == constants.RoleArchitect || roleType == constants.RoleEngineer {
 		return rig + "/" + roleType
 	}
 
@@ -487,7 +492,7 @@ func parseRigAgentAddress(bead *agentBead) string {
 // Keep role lists in sync with beads.RigLevelRoles and beads.NamedRoles.
 func parseRigAgentAddressFromID(id string) string {
 	// Singleton roles: no name segment allowed
-	singletonRoles := []string{constants.RoleWitness, constants.RoleRefinery}
+	singletonRoles := []string{constants.RoleWitness, constants.RoleRefinery, constants.RoleArchitect, constants.RoleEngineer}
 	// Named roles: require a name segment
 	namedRoles := []string{constants.RoleCrew, constants.RolePolecat}
 
@@ -945,7 +950,7 @@ func (r *Router) validateRecipient(identity string) error {
 	parts := strings.SplitN(identity, "/", 3)
 	if len(parts) == 2 {
 		switch parts[1] {
-		case "witness", "refinery":
+		case "witness", "refinery", "architect", "engineer":
 			return nil
 		}
 	}

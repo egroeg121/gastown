@@ -56,6 +56,8 @@ const (
 	RoleBoot       Role = "boot"
 	RoleWitness    Role = "witness"
 	RoleRefinery   Role = "refinery"
+	RoleArchitect  Role = "architect"
+	RoleEngineer   Role = "engineer"
 	RolePolecat    Role = "polecat"
 	RoleCrew       Role = "crew"
 	RoleDog        Role = "dog"
