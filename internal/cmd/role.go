@@ -209,7 +209,7 @@ func GetRoleWithContext(cwd, townRoot string) (RoleInfo, error) {
 
 		// If env is incomplete (missing rig/polecat for roles that need them),
 		// fill gaps from cwd detection and mark as incomplete
-		needsRig := parsedRole == RoleWitness || parsedRole == RoleRefinery || parsedRole == RolePolecat || parsedRole == RoleCrew
+		needsRig := parsedRole == RoleWitness || parsedRole == RoleRefinery || parsedRole == RoleArchitect || parsedRole == RoleEngineer || parsedRole == RolePolecat || parsedRole == RoleCrew
 		needsPolecat := parsedRole == RolePolecat || parsedRole == RoleCrew || parsedRole == RoleDog
 
 		if needsRig && info.Rig == "" && cwdCtx.Rig != "" {
@@ -317,6 +317,18 @@ func detectRole(cwd, townRoot string) RoleInfo {
 		return ctx
 	}
 
+	// Check for architect: <rig>/architect/
+	if len(parts) >= 2 && parts[1] == "architect" {
+		ctx.Role = RoleArchitect
+		return ctx
+	}
+
+	// Check for engineer: <rig>/engineer/
+	if len(parts) >= 2 && parts[1] == "engineer" {
+		ctx.Role = RoleEngineer
+		return ctx
+	}
+
 	// Check for polecat: <rig>/polecats/<name>/
 	if len(parts) >= 3 && parts[1] == "polecats" {
 		ctx.Role = RolePolecat
@@ -377,6 +389,10 @@ func parseRoleString(s string) (Role, string, string) {
 		return RoleWitness, rig, ""
 	case constants.RoleRefinery:
 		return RoleRefinery, rig, ""
+	case constants.RoleArchitect:
+		return RoleArchitect, rig, ""
+	case constants.RoleEngineer:
+		return RoleEngineer, rig, ""
 	case "polecats":
 		if len(parts) >= 3 {
 			return RolePolecat, rig, parts[2]
@@ -415,6 +431,16 @@ func (info RoleInfo) ActorString() string {
 			return fmt.Sprintf("%s/refinery", info.Rig)
 		}
 		return "refinery"
+	case RoleArchitect:
+		if info.Rig != "" {
+			return fmt.Sprintf("%s/architect", info.Rig)
+		}
+		return "architect"
+	case RoleEngineer:
+		if info.Rig != "" {
+			return fmt.Sprintf("%s/engineer", info.Rig)
+		}
+		return "engineer"
 	case RolePolecat:
 		if info.Rig != "" && info.Polecat != "" {
 			return fmt.Sprintf("%s/polecats/%s", info.Rig, info.Polecat)
@@ -449,6 +475,16 @@ func getRoleHome(role Role, rig, polecat, townRoot string) string {
 			return ""
 		}
 		return filepath.Join(townRoot, rig, "refinery", "rig")
+	case RoleArchitect:
+		if rig == "" {
+			return ""
+		}
+		return filepath.Join(townRoot, rig, "architect")
+	case RoleEngineer:
+		if rig == "" {
+			return ""
+		}
+		return filepath.Join(townRoot, rig, "engineer")
 	case RolePolecat:
 		if rig == "" || polecat == "" {
 			return ""
@@ -612,6 +648,8 @@ func runRoleList(cmd *cobra.Command, args []string) error {
 		{RoleLibrarian, "Town-scoped knowledge base curator"},
 		{RoleWitness, "Per-rig polecat lifecycle manager"},
 		{RoleRefinery, "Per-rig merge queue processor"},
+		{RoleArchitect, "Per-rig backlog decomposer"},
+		{RoleEngineer, "Per-rig decomposition reviewer"},
 		{RolePolecat, "Worker with persistent identity, ephemeral sessions"},
 		{RoleCrew, "Persistent worker with own worktree"},
 	}
@@ -687,6 +725,23 @@ func runRoleEnv(cmd *cobra.Command, args []string) error {
 
 func runRoleDef(cmd *cobra.Command, args []string) error {
 	roleName := args[0]
+	rigName := ""
+
+	// Support rig-scoped addressing: "<rig>/<role>" (e.g. "gastown/architect").
+	// Rig-scoped roles (witness, refinery, architect, engineer, ...) are
+	// registered under their bare name in AllRoles(); the rig prefix just
+	// tells us which rig's overrides to layer on top of the built-in default.
+	if idx := strings.Index(roleName, "/"); idx > 0 {
+		candidateRig := roleName[:idx]
+		candidateRole := roleName[idx+1:]
+		for _, r := range config.RigRoles() {
+			if r == candidateRole {
+				rigName = candidateRig
+				roleName = candidateRole
+				break
+			}
+		}
+	}
 
 	// Validate role name
 	validRoles := config.AllRoles()
@@ -705,8 +760,10 @@ func runRoleDef(cmd *cobra.Command, args []string) error {
 	townRoot, _ := workspace.FindFromCwd()
 	rigPath := ""
 	if townRoot != "" {
-		// Try to get rig path if we're in a rig directory
-		if rigInfo, err := GetRole(); err == nil && rigInfo.Rig != "" {
+		if rigName != "" {
+			rigPath = filepath.Join(townRoot, rigName)
+		} else if rigInfo, err := GetRole(); err == nil && rigInfo.Rig != "" {
+			// Try to get rig path if we're in a rig directory
 			rigPath = filepath.Join(townRoot, rigInfo.Rig)
 		}
 	}

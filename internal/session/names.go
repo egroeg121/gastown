@@ -35,6 +35,18 @@ func RefinerySessionName(rigPrefix string) string {
 	return fmt.Sprintf("%s-refinery", rigPrefix)
 }
 
+// ArchitectSessionName returns the session name for a rig's Architect agent.
+// rigPrefix is the rig's beads prefix (e.g., "gt" for gastown, "bd" for beads).
+func ArchitectSessionName(rigPrefix string) string {
+	return fmt.Sprintf("%s-architect", rigPrefix)
+}
+
+// EngineerSessionName returns the session name for a rig's Engineer agent.
+// rigPrefix is the rig's beads prefix (e.g., "gt" for gastown, "bd" for beads).
+func EngineerSessionName(rigPrefix string) string {
+	return fmt.Sprintf("%s-engineer", rigPrefix)
+}
+
 // CrewSessionName returns the session name for a crew worker in a rig.
 // rigPrefix is the rig's beads prefix (e.g., "gt" for gastown, "bd" for beads).
 func CrewSessionName(rigPrefix, name string) string {

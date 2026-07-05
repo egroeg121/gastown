@@ -670,6 +670,20 @@ func resolveRoleToSession(role string) (string, error) {
 		}
 		return session.RefinerySessionName(session.PrefixFor(rig)), nil
 
+	case constants.RoleArchitect, "arch":
+		rig := os.Getenv("GT_RIG")
+		if rig == "" {
+			return "", fmt.Errorf("cannot determine rig - set GT_RIG or run from rig context")
+		}
+		return session.ArchitectSessionName(session.PrefixFor(rig)), nil
+
+	case constants.RoleEngineer, "eng":
+		rig := os.Getenv("GT_RIG")
+		if rig == "" {
+			return "", fmt.Errorf("cannot determine rig - set GT_RIG or run from rig context")
+		}
+		return session.EngineerSessionName(session.PrefixFor(rig)), nil
+
 	default:
 		// Assume it's a direct session name (e.g., gt-gastown-crew-max)
 		return role, nil
@@ -712,6 +726,10 @@ func resolvePathToSession(path string) (string, error) {
 			return session.WitnessSessionName(session.PrefixFor(rig)), nil
 		case constants.RoleRefinery:
 			return session.RefinerySessionName(session.PrefixFor(rig)), nil
+		case constants.RoleArchitect:
+			return session.ArchitectSessionName(session.PrefixFor(rig)), nil
+		case constants.RoleEngineer:
+			return session.EngineerSessionName(session.PrefixFor(rig)), nil
 		case constants.RoleCrew:
 			// Just "<rig>/crew" without a name - need more info
 			return "", fmt.Errorf("crew path requires name: %s/crew/<name>", rig)
@@ -734,7 +752,7 @@ func resolvePathToSession(path string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("cannot parse path '%s' - expected <rig>/<polecat>, <rig>/crew/<name>, <rig>/witness, or <rig>/refinery", path)
+	return "", fmt.Errorf("cannot parse path '%s' - expected <rig>/<polecat>, <rig>/crew/<name>, <rig>/witness, <rig>/refinery, <rig>/architect, or <rig>/engineer", path)
 }
 
 // claudeEnvVars lists the Claude-related environment variables to propagate

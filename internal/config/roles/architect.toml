@@ -1,0 +1,25 @@
+# Architect role definition
+# Per-rig backlog decomposer. Files child beads, reviews decomposition, and
+# does NOT write code. On completing a decomposition, sends the Engineer a
+# DECOMP handoff mail for review. One per rig.
+
+role = "architect"
+scope = "rig"
+nudge = "Run 'gt prime' to check hook and begin a decomposition patrol cycle."
+prompt_template = "architect.md.tmpl"
+
+[session]
+pattern = "{prefix}-architect"
+work_dir = "{town}/{rig}/architect"
+needs_pre_sync = false
+start_command = "exec claude --dangerously-skip-permissions"
+
+[env]
+GT_ROLE = "{rig}/architect"
+GT_SCOPE = "rig"
+
+[health]
+ping_timeout = "30s"
+consecutive_failures = 3
+kill_cooldown = "5m"
+stuck_threshold = "1h"

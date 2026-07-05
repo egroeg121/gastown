@@ -777,6 +777,10 @@ func agentIDToBeadID(agentID, townRoot string) string {
 		return beads.WitnessBeadIDWithPrefix(prefix, rig)
 	case len(parts) == 2 && parts[1] == "refinery":
 		return beads.RefineryBeadIDWithPrefix(prefix, rig)
+	case len(parts) == 2 && parts[1] == "architect":
+		return beads.ArchitectBeadIDWithPrefix(prefix, rig)
+	case len(parts) == 2 && parts[1] == "engineer":
+		return beads.EngineerBeadIDWithPrefix(prefix, rig)
 	case len(parts) == 3 && parts[1] == "crew":
 		return beads.CrewBeadIDWithPrefix(prefix, rig, parts[2])
 	case len(parts) == 3 && parts[1] == "polecats":

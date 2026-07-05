@@ -47,8 +47,8 @@ var ValidAgentRoles = []string{
 	"dog",                  // Town-level with name: gt-dog-<name>
 	constants.RoleWitness,  // Per-rig: gt-<rig>-witness
 	constants.RoleRefinery, // Per-rig: gt-<rig>-refinery
-	constants.RoleCrew,    // Per-rig with name: gt-<rig>-crew-<name>
-	constants.RolePolecat, // Per-rig with name: gt-<rig>-polecat-<name>
+	constants.RoleCrew,     // Per-rig with name: gt-<rig>-crew-<name>
+	constants.RolePolecat,  // Per-rig with name: gt-<rig>-polecat-<name>
 }
 
 // TownLevelRoles are agent roles that don't have a rig.
@@ -337,6 +337,26 @@ func RefineryBeadIDWithPrefix(prefix, rig string) string {
 // RefineryBeadID returns the Refinery agent bead ID for a rig using "gt" prefix.
 func RefineryBeadID(rig string) string {
 	return RefineryBeadIDWithPrefix("gt", rig)
+}
+
+// ArchitectBeadIDWithPrefix returns the Architect agent bead ID for a rig using the specified prefix.
+func ArchitectBeadIDWithPrefix(prefix, rig string) string {
+	return AgentBeadIDWithPrefix(prefix, rig, constants.RoleArchitect, "")
+}
+
+// ArchitectBeadID returns the Architect agent bead ID for a rig using "gt" prefix.
+func ArchitectBeadID(rig string) string {
+	return ArchitectBeadIDWithPrefix("gt", rig)
+}
+
+// EngineerBeadIDWithPrefix returns the Engineer agent bead ID for a rig using the specified prefix.
+func EngineerBeadIDWithPrefix(prefix, rig string) string {
+	return AgentBeadIDWithPrefix(prefix, rig, constants.RoleEngineer, "")
+}
+
+// EngineerBeadID returns the Engineer agent bead ID for a rig using "gt" prefix.
+func EngineerBeadID(rig string) string {
+	return EngineerBeadIDWithPrefix("gt", rig)
 }
 
 // CrewBeadIDWithPrefix returns a Crew worker agent bead ID using the specified prefix.

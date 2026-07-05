@@ -922,3 +922,81 @@ func TestRenderRole_Librarian(t *testing.T) {
 		t.Error("output contains unrendered template directives")
 	}
 }
+
+func TestRenderRole_Architect(t *testing.T) {
+	tmpl, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	data := RoleData{
+		Role:          "architect",
+		RigName:       "myrig",
+		TownRoot:      "/test/town",
+		TownName:      "town",
+		WorkDir:       "/test/town/myrig/architect",
+		DefaultBranch: "main",
+		MayorSession:  "gt-town-mayor",
+		DeaconSession: "gt-town-deacon",
+	}
+
+	output, err := tmpl.RenderRole("architect", data)
+	if err != nil {
+		t.Fatalf("RenderRole() error = %v", err)
+	}
+
+	if !strings.Contains(output, "Architect Context") {
+		t.Error("output missing 'Architect Context'")
+	}
+	if !strings.Contains(output, "do NOT implement code") {
+		t.Error("output missing the no-code mandate")
+	}
+	if !strings.Contains(output, "myrig/engineer") {
+		t.Error("output missing rig-scoped engineer handoff address")
+	}
+	if !strings.Contains(output, "DECOMP") {
+		t.Error("output missing DECOMP handoff reference")
+	}
+	if strings.Contains(output, "{{") {
+		t.Error("output contains unrendered template directives")
+	}
+}
+
+func TestRenderRole_Engineer(t *testing.T) {
+	tmpl, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	data := RoleData{
+		Role:          "engineer",
+		RigName:       "myrig",
+		TownRoot:      "/test/town",
+		TownName:      "town",
+		WorkDir:       "/test/town/myrig/engineer",
+		DefaultBranch: "main",
+		MayorSession:  "gt-town-mayor",
+		DeaconSession: "gt-town-deacon",
+	}
+
+	output, err := tmpl.RenderRole("engineer", data)
+	if err != nil {
+		t.Fatalf("RenderRole() error = %v", err)
+	}
+
+	if !strings.Contains(output, "Engineer Context") {
+		t.Error("output missing 'Engineer Context'")
+	}
+	if !strings.Contains(output, "do NOT implement code") {
+		t.Error("output missing the no-code mandate")
+	}
+	if !strings.Contains(output, "myrig/architect") {
+		t.Error("output missing rig-scoped architect address")
+	}
+	if !strings.Contains(output, "PLAN_READY") {
+		t.Error("output missing PLAN_READY approval signal")
+	}
+	if strings.Contains(output, "{{") {
+		t.Error("output contains unrendered template directives")
+	}
+}

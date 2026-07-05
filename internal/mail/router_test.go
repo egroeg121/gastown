@@ -927,6 +927,16 @@ func TestAgentBeadToAddress(t *testing.T) {
 			want: "gastown/refinery",
 		},
 		{
+			name: "rig singleton architect",
+			bead: &agentBead{ID: "gt-gastown-architect"},
+			want: "gastown/architect",
+		},
+		{
+			name: "rig singleton engineer",
+			bead: &agentBead{ID: "gt-gastown-engineer"},
+			want: "gastown/engineer",
+		},
+		{
 			name: "rig crew worker",
 			bead: &agentBead{ID: "gt-gastown-crew-max"},
 			want: "gastown/max",
@@ -985,6 +995,26 @@ func TestAgentBeadToAddress(t *testing.T) {
 		{
 			name: "malformed singleton refinery with name segment",
 			bead: &agentBead{ID: "bd-beads-refinery-extra"},
+			want: "",
+		},
+		{
+			name: "non-gt prefix no description fallback architect",
+			bead: &agentBead{ID: "ff-films_to_fly_to-architect"},
+			want: "films_to_fly_to/architect",
+		},
+		{
+			name: "non-gt prefix no description fallback engineer",
+			bead: &agentBead{ID: "ff-films_to_fly_to-engineer"},
+			want: "films_to_fly_to/engineer",
+		},
+		{
+			name: "malformed singleton architect with name segment",
+			bead: &agentBead{ID: "bd-beads-architect-extra"},
+			want: "",
+		},
+		{
+			name: "malformed singleton engineer with name segment",
+			bead: &agentBead{ID: "bd-beads-engineer-extra"},
 			want: "",
 		},
 		{
@@ -1169,6 +1199,29 @@ func TestExpandAnnounceNoTownRoot(t *testing.T) {
 }
 
 // ============ Recipient Validation Tests ============
+
+// TestValidateRecipient_RigScopedSingletons verifies that rig-scoped
+// singleton addresses (witness, refinery, architect, engineer) are always
+// considered valid mail recipients without requiring an agent bead lookup.
+// This guards the DECOMP handoff path (Architect -> Engineer): a rig/engineer
+// address must resolve as valid even if no agent bead / bd DB is reachable,
+// otherwise the handoff mail silently fails validation.
+func TestValidateRecipient_RigScopedSingletons(t *testing.T) {
+	r := NewRouterWithTownRoot(t.TempDir(), t.TempDir())
+
+	for _, identity := range []string{
+		"gastown/witness",
+		"gastown/refinery",
+		"gastown/architect",
+		"gastown/engineer",
+		"films_to_fly_to/architect",
+		"films_to_fly_to/engineer",
+	} {
+		if err := r.validateRecipient(identity); err != nil {
+			t.Errorf("validateRecipient(%q) = %v, want nil", identity, err)
+		}
+	}
+}
 
 func TestValidateRecipient(t *testing.T) {
 	// Skip if bd CLI is not available or not functional (e.g., missing DLLs on Windows CI)
