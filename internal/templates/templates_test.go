@@ -881,3 +881,44 @@ func TestRenderRole_Accountant(t *testing.T) {
 		t.Error("output contains unrendered template directives")
 	}
 }
+
+func TestRenderRole_Librarian(t *testing.T) {
+	tmpl, err := New()
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	data := RoleData{
+		Role:          "librarian",
+		TownRoot:      "/test/town",
+		TownName:      "town",
+		WorkDir:       "/test/town/librarian",
+		DefaultBranch: "main",
+		MayorSession:  "gt-town-mayor",
+		DeaconSession: "gt-town-deacon",
+	}
+
+	output, err := tmpl.RenderRole("librarian", data)
+	if err != nil {
+		t.Fatalf("RenderRole() error = %v", err)
+	}
+
+	if !strings.Contains(output, "Librarian Context") {
+		t.Error("output missing 'Librarian Context'")
+	}
+	if !strings.Contains(output, "~/knowledge/") {
+		t.Error("output missing knowledge repo path")
+	}
+	if !strings.Contains(output, "do NOT write product") {
+		t.Error("output missing the no-code mandate")
+	}
+	if !strings.Contains(output, "raw/") || !strings.Contains(output, "wiki/") {
+		t.Error("output missing raw/wiki curation references")
+	}
+	if !strings.Contains(output, "fact-check") {
+		t.Error("output missing hourly fact-check duty")
+	}
+	if strings.Contains(output, "{{") {
+		t.Error("output contains unrendered template directives")
+	}
+}

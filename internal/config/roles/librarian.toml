@@ -1,0 +1,26 @@
+# Librarian role definition
+# Town-scoped knowledge base curator. Owns ~/knowledge/ (a git repo): promotes
+# durable findings from raw/ notes into wiki/ pages, keeps index.md and log.md
+# current, and spot-checks wiki pages against ground truth on an hourly cadence.
+# Does NOT write product code. One per town.
+
+role = "librarian"
+scope = "town"
+nudge = "Run 'gt prime' to check hook and begin a curation/fact-check cycle."
+prompt_template = "librarian.md.tmpl"
+
+[session]
+pattern = "hq-librarian"
+work_dir = "{town}/librarian"
+needs_pre_sync = false
+start_command = "exec claude --dangerously-skip-permissions"
+
+[env]
+GT_ROLE = "librarian"
+GT_SCOPE = "town"
+
+[health]
+ping_timeout = "30s"
+consecutive_failures = 3
+kill_cooldown = "5m"
+stuck_threshold = "1h"
