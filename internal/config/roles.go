@@ -107,12 +107,12 @@ func (d Duration) String() string {
 
 // AllRoles returns the list of all known role names.
 func AllRoles() []string {
-	return []string{"mayor", "deacon", "dog", "accountant", "witness", "refinery", "polecat", "crew"}
+	return []string{"mayor", "deacon", "dog", "accountant", "librarian", "witness", "refinery", "polecat", "crew"}
 }
 
 // TownRoles returns roles that operate at town scope.
 func TownRoles() []string {
-	return []string{"mayor", "deacon", "dog", "accountant"}
+	return []string{"mayor", "deacon", "dog", "accountant", "librarian"}
 }
 
 // RigRoles returns roles that operate at rig scope.

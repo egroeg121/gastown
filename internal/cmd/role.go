@@ -609,6 +609,7 @@ func runRoleList(cmd *cobra.Command, args []string) error {
 		{RoleMayor, "Global coordinator at mayor/"},
 		{RoleDeacon, "Background supervisor daemon"},
 		{RoleAccountant, "Town-scoped budget & resource steward"},
+		{RoleLibrarian, "Town-scoped knowledge base curator"},
 		{RoleWitness, "Per-rig polecat lifecycle manager"},
 		{RoleRefinery, "Per-rig merge queue processor"},
 		{RolePolecat, "Worker with persistent identity, ephemeral sessions"},
