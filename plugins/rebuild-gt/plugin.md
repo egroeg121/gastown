@@ -57,7 +57,7 @@ gt plugin record-run --plugin rebuild-gt --result skipped --rig gastown \
 Before building, verify the source repo is clean and on main:
 
 ```bash
-cd ~/gt/gastown/mayor/rig
+cd "$GT_TOWN_ROOT"/gastown/refinery/rig
 git status --porcelain  # Must be clean
 git branch --show-current  # Must be "main"
 ```
@@ -66,10 +66,11 @@ If either check fails, skip the rebuild and record a wisp.
 
 ## Action
 
-Rebuild from source (the mayor/rig directory is the canonical source):
+Rebuild from source (the refinery/rig worktree is the canonical source; it
+tracks origin=egroeg121/gastown with upstream=gastownhall/gastown):
 
 ```bash
-cd ~/gt/gastown/mayor/rig && make build && make safe-install
+cd "$GT_TOWN_ROOT"/gastown/refinery/rig && make build && make safe-install
 ```
 
 **IMPORTANT**: Use `make safe-install` (not `make install`) to avoid restarting

@@ -8,7 +8,7 @@
 set -euo pipefail
 
 TOWN_ROOT="${GT_TOWN_ROOT:-$(gt town root 2>/dev/null)}"
-RIG_ROOT="${TOWN_ROOT}/gastown/mayor/rig"
+RIG_ROOT="${TOWN_ROOT}/gastown/refinery/rig"
 
 log() { echo "[rebuild-gt] $*"; }
 
