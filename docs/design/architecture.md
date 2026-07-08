@@ -65,8 +65,8 @@ Each agent bead references its role bead via the `role_bead` field.
 
 | Agent | Role | Persistence |
 |-------|------|-------------|
-| **Mayor** | Global coordinator, handles cross-rig communication and escalations | Persistent |
-| **Deacon** | Daemon beacon — receives heartbeats, runs plugins and monitoring | Persistent |
+| **Mayor** | Strategy & coordination: sets priorities, handles cross-rig trade-offs and escalations, talks to the user. Files and prioritizes beads; the Deacon auto-dispatches them. | Persistent |
+| **Deacon** | Operational engine: heartbeats, plugins, monitoring, and the **auto-dispatch loop** — scans `bd ready` per rig each cycle and slings ready work to polecats. See [Deacon owns auto-dispatch, Mayor owns strategy](deacon-dispatch-mayor-strategy.md). | Persistent |
 | **Boot** | Deacon watchdog — spawned by daemon for triage decisions when Deacon is down | Ephemeral |
 | **Dogs** | Long-running workers for cross-rig batch work | Variable |
 

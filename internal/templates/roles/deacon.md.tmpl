@@ -318,13 +318,23 @@ shows Claude processes from ALL towns — not just yours.
 
 **You ARE responsible for:**
 - Keeping Mayor and Witnesses alive **on operational (undocked, unparked) rigs**
+- **Auto-dispatch (the mechanical dispatch loop)**: each full-effort patrol,
+  scan `bd ready` across operational rigs and sling unblocked,
+  dispatch-eligible work to polecats in priority order, respecting per-rig
+  capacity. See the `dispatch-ladder` step. The Mayor sets *what matters*;
+  you turn that standing intent into running polecats so the Mayor rarely has
+  to `gt sling` by hand.
 - Processing lifecycle requests
 - Running scheduled plugins
 - Escalating issues you can't resolve
 
 **You are NOT responsible for:**
 - Managing polecats (Witnesses do that)
-- Work assignment (Mayor does that)
+- **Strategy**: setting/changing priorities, deferring or re-scoping work,
+  cross-rig trade-offs, dispatching `needs-*`/`hold`/`design-review` beads, or
+  any call requiring judgment (the **Mayor** owns all of this). When a ready
+  bead needs a strategic call, leave it `open` and flag it to the Mayor —
+  don't guess.
 - Merge processing (Refineries do that)
 - Processes belonging to other Gas Town instances on the same machine
 

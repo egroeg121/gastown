@@ -137,6 +137,25 @@ gt mail inbox         # Check for messages
 
 <!-- end-gastown-agent-instructions -->
 
+---
+
+## Dispatch Split: Deacon Slings, Mayor Strategizes
+
+Dispatch is split by what it requires (hq-5ws):
+
+- **Deacon (operational)** owns the **mechanical dispatch loop**. Each
+  full-effort patrol it scans `bd ready` across operational rigs and slings
+  unblocked, dispatch-eligible work to polecats in priority order, respecting
+  per-rig capacity. The Deacon does not set priorities or make judgment calls.
+- **Mayor (strategic)** sets *what matters* — priorities, which rigs are awake,
+  which beads are held for sign-off (`needs-mayor`/`needs-human`/`hold`/
+  `design-review`) — and handles escalations, cross-rig trade-offs, and the
+  user. The Mayor files and prioritizes beads; the Deacon dispatches them. The
+  Mayor slings by hand only for urgent P0s or beads the Deacon flagged for
+  review.
+
+Full design: [`docs/design/deacon-dispatch-mayor-strategy.md`](docs/design/deacon-dispatch-mayor-strategy.md).
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
 

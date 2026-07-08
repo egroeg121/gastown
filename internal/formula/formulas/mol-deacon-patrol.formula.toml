@@ -47,6 +47,7 @@ Abbreviated patrol rules:
 - **test-pollution-cleanup**: SKIP.
 - **gate-evaluation**: SKIP.
 - **dispatch-gated-molecules**: SKIP.
+- **dispatch-ladder**: SKIP (only run the auto-dispatch loop on full-effort cycles).
 - **check-convoy-completion**: SKIP.
 - **resolve-external-deps**: SKIP.
 - **fire-notifications**: SKIP.
@@ -72,7 +73,7 @@ When `await-signal` outputs `EFFORT: full`, run all steps thoroughly (normal mod
 
 The goal: idle cycles should burn ~10% of the tokens a full patrol uses."""
 formula = "mol-deacon-patrol"
-version = 14
+version = 15
 
 [vars]
 [vars.wisp_type]
@@ -412,6 +413,97 @@ Skip - nothing to dispatch. Gates haven't closed yet or molecules
 already have active polecats working on them.
 
 **Exit criteria:** All gate-ready molecules dispatched to polecats."""
+
+[[steps]]
+id = "dispatch-ladder"
+title = "Auto-dispatch ready work to polecats"
+needs = ["dispatch-gated-molecules"]
+description = """
+The Deacon owns the **mechanical dispatch loop**: each patrol cycle, scan
+`bd ready` across every operational rig and sling unblocked, dispatch-eligible
+work to polecats — without waking the Mayor.
+
+This is the heart of the Deacon-owns-dispatch / Mayor-owns-strategy split
+(hq-5ws). The Mayor sets *what matters* (priorities, which rigs are awake,
+which beads need human sign-off). The Deacon turns that standing intent into
+running polecats every cycle. The Mayor should almost never need to `gt sling`
+by hand.
+
+**Step 0: Respect the Idle Town Principle**
+If `await-signal` last reported `EFFORT: reduced`, SKIP this step (abbreviated
+patrol). Only run the ladder on full-effort cycles.
+
+**Step 1: Enumerate operational rigs**
+```bash
+gt rig list
+```
+Process ONLY rigs whose status is operational. **Skip DOCKED and PARKED rigs
+entirely** — slinging to them is blocked and they are off on purpose. Never
+undock/unpark a rig to dispatch work.
+
+**Step 2: Per-rig ready scan**
+For each operational rig, find unblocked work with no active polecat:
+```bash
+bd ready --repo <rig> --json
+```
+A bead is **dispatch-eligible** when ALL of these hold:
+- status is `open` (not in_progress/blocked/deferred/hooked/closed)
+- no unmet dependencies (that's what `bd ready` guarantees)
+- no polecat currently has it hooked or claimed
+- it is NOT labelled `needs-human`, `needs-mayor`, `hold`, or `design-review`
+  (these are the Mayor's call — leave them for the strategic pass)
+- it is NOT a coordination-only bead (convoys, mail, `decision` beads that
+  carry no implementable change)
+
+**Step 3: Respect capacity**
+Check the rig's polecat pool before slinging:
+```bash
+gt polecat list <rig>
+```
+Honor the rig's max polecat capacity (`gt rig config get <rig> max_polecats`,
+default to a small cap like 3 if unset). Do NOT exceed it — queued beads stay
+`open` and get picked up a later cycle. Dispatching into a saturated pool just
+creates spawn pressure.
+
+When the Accountant signals `CAPACITY_AVAILABLE` (via mail/nudge handled in
+inbox-check), treat that rig as having a free slot this cycle and prefer it.
+
+**Step 4: Dispatch in priority order**
+Within a rig, dispatch highest-priority ready beads first (P0 → P1 → …). The
+Mayor's priorities are encoded in the bead `priority` field and in any
+`pinned`/`P0` markers — the Deacon does not re-rank, it just honors order.
+```bash
+gt sling <bead-id> <rig> --merge=local
+```
+Stop slinging a rig once its capacity is reached.
+
+**Step 5: Escalate, don't guess**
+If a ready bead is ambiguous — unclear which rig owns it, conflicting labels,
+or it looks like it needs a cross-rig trade-off — do NOT dispatch it. Leave it
+`open` and note it for the Mayor:
+```bash
+gt mail send mayor/ -s "DISPATCH_REVIEW: <bead-id>" \\
+  -m "Ready bead needs a strategic call before dispatch: <why>."
+```
+This is rare — most ready work is unambiguous and self-dispatches.
+
+**Step 6: Log dispatch**
+Record what was slung for the patrol digest:
+```
+Dispatch ladder: <rig> slung N (<bead-ids>), capacity M/MAX; <rig2> ...
+```
+If nothing was ready anywhere, log `Dispatch ladder: no ready work` and move on.
+
+**Boundaries (what the Deacon does NOT do here):**
+- Does NOT set or change priorities (Mayor's job)
+- Does NOT defer, cancel, or re-scope work (Mayor's job)
+- Does NOT dispatch `needs-*`/`hold`/`design-review` beads (Mayor's job)
+- Does NOT make cross-rig trade-offs (Mayor's job)
+- Does NOT undock/unpark rigs to create dispatch targets
+
+**Exit criteria:** Every operational rig scanned; all unambiguous, in-capacity,
+dispatch-eligible ready work slung in priority order; ambiguous work flagged to
+the Mayor; dispatch logged."""
 
 [[steps]]
 id = "check-convoy-completion"
@@ -1237,6 +1329,7 @@ After await-signal returns, check the EFFORT directive in the output:
 **If `EFFORT: reduced`** — Run ABBREVIATED patrol:
 - heartbeat: ALWAYS run
 - inbox-check: Quick drain only, skip individual messages unless HELP/RECOVERED_BEAD
+- dispatch-ladder: SKIP (auto-dispatch only runs on full-effort cycles)
 - orphan-process-cleanup through fire-notifications: SKIP all
 - heartbeat-mid: SKIP
 - health-scan: Quick status checks only, skip nudges
@@ -1258,7 +1351,7 @@ After await-signal returns (either by signal or timeout):
 gt patrol report --summary "<brief summary>" \
   --steps "heartbeat:OK,inbox-check:OK,orphan-process-cleanup:SKIP,..."
 ```
-The --steps flag is REQUIRED. List ALL 26 steps with their actual status.
+The --steps flag is REQUIRED. List ALL 27 steps with their actual status.
 Steps you executed get OK, steps you skipped get SKIP.
 This closes the current patrol wisp and automatically creates a new one.
 4. Hand off immediately so a fresh Deacon session picks up the newly-created
