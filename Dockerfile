@@ -2,8 +2,8 @@
 # docker build -t gastown:latest -f Dockerfile .
 FROM docker/sandbox-templates:claude-code
 
-ARG GO_VERSION=1.25.8
-ARG DOLT_VERSION=2.0.7
+ARG GO_VERSION=1.26.10
+ARG DOLT_VERSION=2.6.0
 
 USER root
 
@@ -11,6 +11,7 @@ USER root
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
+    libicu-dev \
     sqlite3 \
     tmux \
     curl \

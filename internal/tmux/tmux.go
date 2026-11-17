@@ -241,15 +241,25 @@ func NewTmuxWithSocket(socket string) *Tmux {
 // All commands include -u flag for UTF-8 support regardless of locale settings.
 // See: https://github.com/steveyegge/gastown/issues/1219
 func (t *Tmux) run(args ...string) (string, error) {
-	// Prepend global flags: -u (UTF-8 mode, PATCH-004) and optionally -L (socket).
-	// The -L flag must come before the subcommand, so it goes in the prefix.
+	return t.runContext(context.Background(), args...)
+}
+
+func (t *Tmux) commandContext(ctx context.Context, args ...string) *exec.Cmd {
 	allArgs := []string{"-u"}
 	if t.socketName != "" {
 		allArgs = append(allArgs, "-L", t.socketName)
 	}
 	allArgs = append(allArgs, args...)
-	cmd := exec.Command("tmux", allArgs...)
+	cmd := exec.CommandContext(ctx, "tmux", allArgs...)
 	hideConsoleWindow(cmd)
+	return cmd
+}
+
+func (t *Tmux) runContext(ctx context.Context, args ...string) (string, error) {
+	cmd := t.commandContext(ctx, args...)
+	if _, ok := ctx.Deadline(); ok {
+		cmd.WaitDelay = 100 * time.Millisecond
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -287,14 +297,22 @@ func (t *Tmux) wrapError(err error, stderr string, args []string) error {
 	return fmt.Errorf("tmux %s: %w", args[0], err)
 }
 
-// NewSession creates a new detached tmux session.
-func (t *Tmux) NewSession(name, workDir string) error {
-	if err := validateSessionName(name); err != nil {
+func (t *Tmux) createNewSession(name, workDir string, env map[string]string) error {
+	if err := t.ensureNewSessionSocketSafe(); err != nil {
 		return err
 	}
+
 	args := []string{"new-session", "-d", "-s", name}
 	if workDir != "" {
 		args = append(args, "-c", workDir)
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", k, env[k]))
 	}
 	if _, err := t.run(args...); err != nil {
 		return err
@@ -304,6 +322,14 @@ func (t *Tmux) NewSession(name, workDir string) error {
 	// "latest" so the window auto-resizes to the attaching client's terminal size.
 	_, _ = t.run("set-option", "-wt", name, "window-size", "latest")
 	return nil
+}
+
+// NewSession creates a new detached tmux session.
+func (t *Tmux) NewSession(name, workDir string) error {
+	if err := validateSessionName(name); err != nil {
+		return err
+	}
+	return t.createNewSession(name, workDir, nil)
 }
 
 // NewSessionWithCommand creates a new detached tmux session that immediately runs a command.
@@ -331,6 +357,9 @@ func (t *Tmux) NewSessionWithCommand(name, workDir, command string) error {
 	if err := validateCommandBinary(command); err != nil {
 		return err
 	}
+	if err := t.ensureNewSessionSocketSafe(); err != nil {
+		return err
+	}
 
 	// Defense-in-depth: remove CLAUDECODE and agent-identity vars from the
 	// tmux server's global environment so new sessions don't inherit them.
@@ -350,17 +379,9 @@ func (t *Tmux) NewSessionWithCommand(name, workDir, command string) error {
 	// Two-step creation: create session with default shell first, configure
 	// remain-on-exit, then replace the shell with the actual command. This
 	// eliminates the race between command exit and health check setup.
-	args := []string{"new-session", "-d", "-s", name}
-	if workDir != "" {
-		args = append(args, "-c", workDir)
-	}
-	if _, err := t.run(args...); err != nil {
+	if err := t.createNewSession(name, workDir, nil); err != nil {
 		return err
 	}
-	// tmux 3.3+ sets window-size=manual on detached sessions (no client present),
-	// which locks the window at 80x24 even after a client attaches. Override to
-	// "latest" so the window auto-resizes to the attaching client's terminal size.
-	_, _ = t.run("set-option", "-wt", name, "window-size", "latest")
 
 	// Enable remain-on-exit BEFORE command runs so we can inspect exit status
 	_, _ = t.run("set-option", "-t", name, "remain-on-exit", "on")
@@ -426,27 +447,9 @@ func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env ma
 
 	// Two-step creation: create session with env vars and default shell, then
 	// replace the shell with the actual command after configuring remain-on-exit.
-	args := []string{"new-session", "-d", "-s", name}
-	if workDir != "" {
-		args = append(args, "-c", workDir)
-	}
-	// Add -e flags to set environment variables in the session before the shell starts.
-	// Keys are sorted for deterministic behavior.
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		args = append(args, "-e", fmt.Sprintf("%s=%s", k, env[k]))
-	}
-	if _, err := t.run(args...); err != nil {
+	if err := t.createNewSession(name, workDir, env); err != nil {
 		return err
 	}
-	// tmux 3.3+ sets window-size=manual on detached sessions (no client present),
-	// which locks the window at 80x24 even after a client attaches. Override to
-	// "latest" so the window auto-resizes to the attaching client's terminal size.
-	_, _ = t.run("set-option", "-wt", name, "window-size", "latest")
 
 	// Enable remain-on-exit BEFORE command runs so we can inspect exit status
 	_, _ = t.run("set-option", "-t", name, "remain-on-exit", "on")
@@ -648,14 +651,14 @@ const processKillGracePeriod = 2 * time.Second
 // Process:
 // 1. Get the pane's main process PID and its process group ID (PGID)
 // 2. Kill the entire process group (catches reparented processes that stayed in the group)
-// 3. Find all descendant processes recursively (catches any stragglers)
+// 3. Find all descendant processes from one process snapshot (catches any stragglers)
 // 4. Send SIGTERM/SIGKILL to descendants
 // 5. Kill the pane process itself
 // 6. Kill the tmux session
 //
 // The process group kill is critical because:
-// - pgrep -P only finds direct children (PPID matching)
-// - Processes that reparent to init (PID 1) are missed by pgrep
+// - Descendant snapshots only find processes still connected by PPID
+// - Processes that reparent to init (PID 1) are missed by PPID traversal
 // - But they typically stay in the same process group unless they call setsid()
 //
 // This ensures Claude processes and all their children are properly terminated.
@@ -869,24 +872,83 @@ func collectReparentedGroupMembers(pgid string, knownPIDs map[string]bool) []str
 	return reparented
 }
 
-// getAllDescendants recursively finds all descendant PIDs of a process.
+type processSnapshot struct {
+	children map[string][]string
+	names    map[string]string
+}
+
+// getAllDescendants finds all descendant PIDs of a process from one process snapshot.
 // Returns PIDs in deepest-first order so killing them doesn't orphan grandchildren.
 func getAllDescendants(pid string) []string {
+	out, err := exec.Command("ps", "-axo", "pid=,ppid=,comm=").Output()
+	if err != nil {
+		return nil
+	}
+	return descendantsFromPS(pid, out)
+}
+
+func descendantsFromPS(pid string, out []byte) []string {
+	root, ok := normalizeProcessID(pid)
+	if !ok {
+		return nil
+	}
+	return descendantsFromSnapshot(root, parseProcessSnapshot(out))
+}
+
+func parseProcessSnapshot(out []byte) processSnapshot {
+	snapshot := processSnapshot{
+		children: make(map[string][]string),
+		names:    make(map[string]string),
+	}
+
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 {
+			continue
+		}
+
+		pid, ok := normalizeProcessID(fields[0])
+		if !ok {
+			continue
+		}
+		ppid, ok := normalizeProcessID(fields[1])
+		if !ok {
+			continue
+		}
+
+		if len(fields) > 2 {
+			snapshot.names[pid] = strings.Join(fields[2:], " ")
+		}
+		snapshot.children[ppid] = append(snapshot.children[ppid], pid)
+	}
+
+	return snapshot
+}
+
+func normalizeProcessID(pid string) (string, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(pid))
+	if err != nil || n < 0 {
+		return "", false
+	}
+	return strconv.Itoa(n), true
+}
+
+func descendantsFromSnapshot(root string, snapshot processSnapshot) []string {
+	seen := map[string]bool{root: true}
 	var result []string
 
-	// Get direct children using pgrep
-	out, err := exec.Command("pgrep", "-P", pid).Output()
-	if err != nil {
-		return result
+	var walk func(string)
+	walk = func(pid string) {
+		for _, child := range snapshot.children[pid] {
+			if seen[child] {
+				continue
+			}
+			seen[child] = true
+			walk(child)
+			result = append(result, child)
+		}
 	}
-
-	children := strings.Fields(strings.TrimSpace(string(out)))
-	for _, child := range children {
-		// First add grandchildren (recursively) - deepest first
-		result = append(result, getAllDescendants(child)...)
-		// Then add this child
-		result = append(result, child)
-	}
+	walk(root)
 
 	return result
 }
@@ -1683,23 +1745,59 @@ type NudgeOpts struct {
 	TownRoot string
 }
 
-// canonicalPaneTarget converts a pane identifier like "%23" into a tmux target
-// that send-keys can resolve reliably. Bare pane IDs work for display-message,
-// but for send-keys we prefer an explicit session:window.pane target.
+// canonicalPaneTarget converts a pane identifier like "%23" into an explicit
+// tmux session:window.pane target. If the pane is stale or resolves outside the
+// expected session, fall back to the session's first pane instead of the active
+// pane that a bare session target would select.
 func (t *Tmux) canonicalPaneTarget(session, pane string) string {
+	fallback := session + ":0.0"
 	if pane == "" {
-		return session
+		return fallback
 	}
 
-	out, err := t.run("display-message", "-t", pane, "-p", "#{session_name}:#{window_index}.#{pane_index}")
-	if err == nil {
-		target := strings.TrimSpace(out)
-		if target != "" {
-			return target
+	expectedSession := session
+	if out, err := t.run("display-message", "-t", session, "-p", "#{session_name}"); err == nil {
+		if resolved := strings.TrimSpace(out); resolved != "" {
+			expectedSession = resolved
 		}
 	}
 
-	return pane
+	out, err := t.run("display-message", "-t", pane, "-p", "#{session_name}\t#{window_index}\t#{pane_index}")
+	if err != nil {
+		return fallback
+	}
+	if target, ok := canonicalPaneTargetFromDisplay(expectedSession, out); ok {
+		return target
+	}
+	return fallback
+}
+
+func canonicalPaneTargetFromDisplay(expectedSession, out string) (string, bool) {
+	parts := strings.Split(strings.TrimSpace(out), "\t")
+	if len(parts) != 3 {
+		return "", false
+	}
+
+	session := strings.TrimSpace(parts[0])
+	window := strings.TrimSpace(parts[1])
+	pane := strings.TrimSpace(parts[2])
+	if session != expectedSession || !isTmuxIndex(window) || !isTmuxIndex(pane) {
+		return "", false
+	}
+	return fmt.Sprintf("%s:%s.%s", session, window, pane), true
+}
+
+func isTmuxIndex(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	n, err := strconv.Atoi(value)
+	return err == nil && n >= 0
 }
 
 // NudgeSessionWithOpts is like NudgeSession but accepts delivery options.
@@ -1727,7 +1825,7 @@ func (t *Tmux) NudgeSessionWithOpts(session, message string, opts NudgeOpts) err
 
 	// Resolve the correct target: in multi-pane sessions, find the pane
 	// running the agent rather than sending to the focused pane.
-	target := session
+	target := session + ":0.0"
 	if agentPane, err := t.FindAgentPane(session); err == nil && agentPane != "" {
 		target = t.canonicalPaneTarget(session, agentPane)
 	}
@@ -1798,9 +1896,10 @@ func (t *Tmux) NudgeSessionWithOpts(session, message string, opts NudgeOpts) err
 		}
 	}
 
-	// 7. Send Enter with verification — polls pane content to confirm Enter
-	// was processed, retrying with exponential backoff under load. (GH#gt-0b5)
-	if err := t.sendEnterVerified(target); err != nil {
+	// 7. Submit with verification — confirms Enter was processed and the
+	// message actually left the composer instead of being stranded by a
+	// swallowed carriage return. (GH#gt-0b5, PR #4461 replacement)
+	if err := t.submitComposer(target, sanitized, readyPromptPrefixForSession(t, session)); err != nil {
 		return fmt.Errorf("nudge to session %q: %w", session, err)
 	}
 
@@ -1870,9 +1969,10 @@ func (t *Tmux) NudgePane(pane, message string) error {
 		}
 	}
 
-	// 7. Send Enter with verification — polls pane content to confirm Enter
-	// was processed, retrying with exponential backoff under load. (GH#gt-0b5)
-	if err := t.sendEnterVerified(pane); err != nil {
+	// 7. Submit with verification — confirms Enter was processed and the
+	// message actually left the composer instead of being stranded by a
+	// swallowed carriage return. (GH#gt-0b5, PR #4461 replacement)
+	if err := t.submitComposer(pane, sanitized, DefaultReadyPromptPrefix); err != nil {
 		return fmt.Errorf("nudge to pane %q: %w", pane, err)
 	}
 
@@ -2376,14 +2476,22 @@ func (t *Tmux) CheckSessionHealth(session string, maxInactivity time.Duration) Z
 // Uses ps to get the actual command name from the process's executable path.
 // This handles cases where argv[0] is modified (e.g., Claude showing version "2.1.30").
 func processMatchesNames(pid string, names []string) bool {
+	matches, _ := processMatchesNamesChecked(pid, names)
+	return matches
+}
+
+func processMatchesNamesChecked(pid string, names []string) (bool, error) {
 	if len(names) == 0 {
-		return false
+		return false, nil
 	}
 	// Use ps to get the command name (COMM column gives the executable name)
 	cmd := exec.Command("ps", "-p", pid, "-o", "comm=")
 	out, err := cmd.Output()
 	if err != nil {
-		return false
+		if isNoMatchExit(err) {
+			return false, nil
+		}
+		return false, err
 	}
 	// Get just the base name (in case it's a full path like /Users/.../claude)
 	commPath := strings.TrimSpace(string(out))
@@ -2392,66 +2500,107 @@ func processMatchesNames(pid string, names []string) bool {
 	// Check if any name matches
 	for _, name := range names {
 		if comm == name {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // hasDescendantWithNames checks if a process has any descendant (child, grandchild, etc.)
 // matching any of the given names. Recursively traverses the process tree up to maxDepth.
 // Used when the pane command is a shell (bash, zsh, pwsh) that launched an agent.
 func hasDescendantWithNames(pid string, names []string, depth int) bool {
+	found, _ := hasDescendantWithNamesChecked(pid, names, depth)
+	return found
+}
+
+func hasDescendantWithNamesChecked(pid string, names []string, depth int) (bool, error) {
 	const maxDepth = 10 // Prevent infinite loops in case of circular references
+	if len(names) == 0 || depth > maxDepth {
+		return false, nil
+	}
+	if runtime.GOOS == "windows" {
+		return hasDescendantWithNamesWindows(pid, names, depth), nil
+	}
+	return hasDescendantWithNamesPosixChecked(pid, names, depth)
+}
+
+// hasDescendantWithNamesPosix walks one ps snapshot on Unix systems.
+func hasDescendantWithNamesPosix(pid string, names []string, depth int) bool {
+	found, _ := hasDescendantWithNamesPosixChecked(pid, names, depth)
+	return found
+}
+
+func hasDescendantWithNamesPosixChecked(pid string, names []string, depth int) (bool, error) {
+	const maxDepth = 10
+	if len(names) == 0 || depth > maxDepth {
+		return false, nil
+	}
+	root, ok := normalizeProcessID(pid)
+	if !ok {
+		return false, fmt.Errorf("invalid process ID %q", pid)
+	}
+
+	out, err := exec.Command("ps", "-axo", "pid=,ppid=,comm=").Output()
+	if err != nil {
+		return false, err
+	}
+	return hasDescendantWithNamesFromSnapshot(root, names, depth, parseProcessSnapshot(out)), nil
+}
+
+func hasDescendantWithNamesFromPS(pid string, names []string, depth int, out []byte) bool {
+	root, ok := normalizeProcessID(pid)
+	if !ok {
+		return false
+	}
+	return hasDescendantWithNamesFromSnapshot(root, names, depth, parseProcessSnapshot(out))
+}
+
+func hasDescendantWithNamesFromSnapshot(root string, names []string, depth int, snapshot processSnapshot) bool {
+	const maxDepth = 10
 	if len(names) == 0 || depth > maxDepth {
 		return false
 	}
-	if runtime.GOOS == "windows" {
-		return hasDescendantWithNamesWindows(pid, names, depth)
-	}
-	return hasDescendantWithNamesPosix(pid, names, depth)
-}
 
-// hasDescendantWithNamesPosix uses pgrep to find child processes on Unix systems.
-func hasDescendantWithNamesPosix(pid string, names []string, depth int) bool {
-	const maxDepth = 10
-	if depth > maxDepth {
-		return false
-	}
-	// Use pgrep to find child processes
-	cmd := exec.Command("pgrep", "-P", pid, "-l")
-	out, err := cmd.Output()
-	if err != nil {
-		return false
-	}
 	// Build a set of names for fast lookup
 	nameSet := make(map[string]bool, len(names))
 	for _, n := range names {
-		nameSet[n] = true
-	}
-	// Check if any child matches, or recursively check grandchildren
-	lines := strings.Split(string(out), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		// Format: "PID name" e.g., "29677 node"
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			childPid := parts[0]
-			childName := parts[1]
-			// Direct match
-			if nameSet[childName] {
-				return true
-			}
-			// Recursive check of descendants
-			if hasDescendantWithNames(childPid, names, depth+1) {
-				return true
-			}
+		n = strings.TrimSpace(n)
+		if n != "" {
+			nameSet[n] = true
 		}
 	}
-	return false
+	if len(nameSet) == 0 {
+		return false
+	}
+
+	seen := map[string]bool{root: true}
+	var walk func(string, int) bool
+	walk = func(pid string, currentDepth int) bool {
+		if currentDepth > maxDepth {
+			return false
+		}
+		for _, child := range snapshot.children[pid] {
+			if seen[child] {
+				continue
+			}
+			seen[child] = true
+			if nameSet[filepath.Base(strings.TrimSpace(snapshot.names[child]))] {
+				return true
+			}
+			if walk(child, currentDepth+1) {
+				return true
+			}
+		}
+		return false
+	}
+
+	return walk(root, depth)
+}
+
+func isNoMatchExit(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 1
 }
 
 // FindSessionByWorkDir finds tmux sessions where the pane's current working directory
@@ -2748,29 +2897,48 @@ func (t *Tmux) IsAgentRunning(session string, expectedPaneCommands ...string) bo
 // then checks only that pane. Falls back to scanning all panes for legacy
 // sessions without GT_PANE_ID.
 func (t *Tmux) IsRuntimeRunning(session string, processNames []string) bool {
+	running, _ := t.IsRuntimeRunningChecked(session, processNames)
+	return running
+}
+
+// IsRuntimeRunningChecked is like IsRuntimeRunning, but preserves tmux/process
+// query errors so destructive cleanup callers can fail closed instead of
+// treating unknown liveness as confirmed absence.
+func (t *Tmux) IsRuntimeRunningChecked(session string, processNames []string) (bool, error) {
 	if len(processNames) == 0 {
-		return false
+		return false, nil
 	}
 
 	// ZFC: check declared pane identity set at session startup (gt-qmsx).
-	if declaredPane, err := t.GetEnvironment(session, "GT_PANE_ID"); err == nil && declaredPane != "" {
-		if t.checkTargetPaneForRuntime(session, declaredPane, processNames) {
-			return true
+	if declaredPane, ok, err := t.getEnvironmentOptional(session, "GT_PANE_ID"); err != nil {
+		return false, err
+	} else if ok && declaredPane != "" {
+		running, err := t.checkTargetPaneForRuntimeChecked(session, declaredPane, processNames)
+		if err != nil {
+			if runtime.GOOS != "windows" {
+				return false, err
+			}
+		} else if running {
+			return true, nil
 		}
 		// On Windows (psmux), pane IDs like %1 may not be supported by
 		// display-message. Fall through to legacy path instead of returning false.
 		if runtime.GOOS != "windows" {
-			return false
+			return false, nil
 		}
 	}
 
 	// Legacy fallback: check first window, then scan all panes.
-	if t.checkPaneForRuntime(session, processNames) {
-		return true
+	running, err := t.checkPaneForRuntimeChecked(session, processNames)
+	if err != nil {
+		return false, err
+	}
+	if running {
+		return true, nil
 	}
 	out, err := t.run("list-panes", "-s", "-t", session, "-F", "#{pane_current_command}\t#{pane_pid}")
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		parts := strings.SplitN(line, "\t", 2)
@@ -2778,32 +2946,81 @@ func (t *Tmux) IsRuntimeRunning(session string, processNames []string) bool {
 			continue
 		}
 		cmd, pid := parts[0], parts[1]
-		if t.matchesPaneRuntime(session, cmd, pid, processNames) {
-			return true
+		running, err := t.matchesPaneRuntimeChecked(session, cmd, pid, processNames)
+		if err != nil {
+			return false, err
+		}
+		if running {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // checkTargetPaneForRuntime checks if a specific pane (by ID, e.g., "%5") is
 // running a matching process. Used by the ZFC path when GT_PANE_ID is declared.
 func (t *Tmux) checkTargetPaneForRuntime(session, paneID string, processNames []string) bool {
+	running, _ := t.checkTargetPaneForRuntimeChecked(session, paneID, processNames)
+	return running
+}
+
+func (t *Tmux) checkTargetPaneForRuntimeChecked(session, paneID string, processNames []string) (bool, error) {
 	cmd, err := t.run("display-message", "-t", paneID, "-p", "#{pane_current_command}")
 	if err != nil {
-		return false // pane doesn't exist
+		return false, err
 	}
-	pid, _ := t.run("display-message", "-t", paneID, "-p", "#{pane_pid}")
-	return t.matchesPaneRuntime(session, strings.TrimSpace(cmd), strings.TrimSpace(pid), processNames)
+	if running, err := t.matchesPaneRuntimeChecked(session, strings.TrimSpace(cmd), "", processNames); err != nil {
+		return false, err
+	} else if running {
+		return true, nil
+	}
+	pid, err := t.run("display-message", "-t", paneID, "-p", "#{pane_pid}")
+	if err != nil {
+		return false, err
+	}
+	return t.matchesPaneRuntimeChecked(session, strings.TrimSpace(cmd), strings.TrimSpace(pid), processNames)
 }
 
 // checkPaneForRuntime checks if the first window's pane is running a matching process.
 func (t *Tmux) checkPaneForRuntime(session string, processNames []string) bool {
+	running, _ := t.checkPaneForRuntimeChecked(session, processNames)
+	return running
+}
+
+func (t *Tmux) checkPaneForRuntimeChecked(session string, processNames []string) (bool, error) {
 	cmd, err := t.GetPaneCommand(session)
 	if err != nil {
+		return false, err
+	}
+	if running, err := t.matchesPaneRuntimeChecked(session, cmd, "", processNames); err != nil {
+		return false, err
+	} else if running {
+		return true, nil
+	}
+	pid, err := t.GetPanePID(session)
+	if err != nil {
+		return false, err
+	}
+	return t.matchesPaneRuntimeChecked(session, cmd, pid, processNames)
+}
+
+func (t *Tmux) getEnvironmentOptional(session, key string) (string, bool, error) {
+	value, err := t.GetEnvironment(session, key)
+	if err == nil {
+		return value, value != "", nil
+	}
+	if isMissingEnvironmentError(err, key) {
+		return "", false, nil
+	}
+	return "", false, err
+}
+
+func isMissingEnvironmentError(err error, key string) bool {
+	if err == nil {
 		return false
 	}
-	pid, _ := t.GetPanePID(session)
-	return t.matchesPaneRuntime(session, cmd, pid, processNames)
+	msg := err.Error()
+	return strings.Contains(msg, "unknown variable") || strings.Contains(msg, fmt.Sprintf("environment variable %s not found", key))
 }
 
 // cursorAgentSessionDeclaresCursor reports whether tmux session env identifies the Cursor
@@ -2851,33 +3068,91 @@ func processNamesForSession(t *Tmux, session string, processNames []string) []st
 	return withoutProcessName(processNames, "agent")
 }
 
+func processNamesForSessionChecked(t *Tmux, session string, processNames []string) ([]string, error) {
+	if len(processNames) == 0 {
+		return processNames, nil
+	}
+	declaresCursor, err := cursorAgentSessionDeclaresCursorChecked(t, session)
+	if err != nil {
+		return nil, err
+	}
+	if declaresCursor {
+		return processNames, nil
+	}
+	return withoutProcessName(processNames, "agent"), nil
+}
+
+func cursorAgentSessionDeclaresCursorChecked(t *Tmux, session string) (bool, error) {
+	if t == nil || session == "" {
+		return false, nil
+	}
+	agent, ok, err := t.getEnvironmentOptional(session, "GT_AGENT")
+	if err != nil {
+		return false, err
+	}
+	if ok && agent == string(config.AgentCursor) {
+		return true, nil
+	}
+	names, ok, err := t.getEnvironmentOptional(session, "GT_PROCESS_NAMES")
+	if err != nil {
+		return false, err
+	}
+	if ok && names != "" {
+		for _, n := range strings.Split(names, ",") {
+			if strings.TrimSpace(n) == "cursor-agent" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // matchesPaneRuntime checks if a pane with the given command and PID is running a matching process.
 func (t *Tmux) matchesPaneRuntime(session, cmd, pid string, processNames []string) bool {
-	names := processNamesForSession(t, session, processNames)
+	running, _ := t.matchesPaneRuntimeChecked(session, cmd, pid, processNames)
+	return running
+}
+
+func (t *Tmux) matchesPaneRuntimeChecked(session, cmd, pid string, processNames []string) (bool, error) {
+	names, err := processNamesForSessionChecked(t, session, processNames)
+	if err != nil {
+		return false, err
+	}
 	if len(names) == 0 {
-		return false
+		return false, nil
 	}
 	// Direct command match
 	for _, name := range names {
 		if cmd == name {
-			return true
+			return true, nil
 		}
 	}
 	if pid == "" {
-		return false
+		return false, nil
 	}
 	// If pane command is a shell, check descendants
 	for _, shell := range constants.SupportedShells {
 		if cmd == shell {
-			return hasDescendantWithNames(pid, names, 0)
+			return hasDescendantWithNamesChecked(pid, names, 0)
 		}
 	}
 	// Unrecognized command: check if process itself matches (version-as-argv[0])
-	if processMatchesNames(pid, names) {
-		return true
+	running, err := processMatchesNamesChecked(pid, names)
+	if err == nil && running {
+		return true, nil
 	}
 	// Finally check descendants as fallback
-	return hasDescendantWithNames(pid, names, 0)
+	descendantRunning, descendantErr := hasDescendantWithNamesChecked(pid, names, 0)
+	if descendantErr != nil {
+		return false, descendantErr
+	}
+	if descendantRunning {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // IsAgentAlive checks if an agent is running in the session using agent-agnostic detection.
@@ -2885,20 +3160,41 @@ func (t *Tmux) matchesPaneRuntime(session, cmd, pid string, processNames []strin
 // falling back to GT_AGENT-based lookup for legacy sessions.
 // This is the preferred method for zombie detection across all agent types.
 func (t *Tmux) IsAgentAlive(session string) bool {
-	return t.IsRuntimeRunning(session, t.resolveSessionProcessNames(session))
+	alive, _ := t.IsAgentAliveChecked(session)
+	return alive
+}
+
+// IsAgentAliveChecked is like IsAgentAlive, but preserves liveness-query errors
+// for callers that must not treat unknown state as confirmed death.
+func (t *Tmux) IsAgentAliveChecked(session string) (bool, error) {
+	processNames, err := t.resolveSessionProcessNamesChecked(session)
+	if err != nil {
+		return false, err
+	}
+	return t.IsRuntimeRunningChecked(session, processNames)
 }
 
 // resolveSessionProcessNames returns the process names to check for a session.
 // Prefers GT_PROCESS_NAMES (set at startup, handles custom agents that shadow
 // built-in presets). Falls back to GT_AGENT-based lookup for legacy sessions.
 func (t *Tmux) resolveSessionProcessNames(session string) []string {
+	processNames, _ := t.resolveSessionProcessNamesChecked(session)
+	return processNames
+}
+
+func (t *Tmux) resolveSessionProcessNamesChecked(session string) ([]string, error) {
 	// Prefer explicit process names set at startup (handles custom agents correctly)
-	if names, err := t.GetEnvironment(session, "GT_PROCESS_NAMES"); err == nil && names != "" {
-		return strings.Split(names, ",")
+	if names, ok, err := t.getEnvironmentOptional(session, "GT_PROCESS_NAMES"); err != nil {
+		return nil, err
+	} else if ok && names != "" {
+		return strings.Split(names, ","), nil
 	}
 	// Fallback: resolve from agent name (built-in presets only)
-	agentName, _ := t.GetEnvironment(session, "GT_AGENT")
-	return config.GetProcessNames(agentName) // Returns Claude defaults if empty
+	agentName, _, err := t.getEnvironmentOptional(session, "GT_AGENT")
+	if err != nil {
+		return nil, err
+	}
+	return config.GetProcessNames(agentName), nil // Returns Claude defaults if empty
 }
 
 // WaitForCommand polls until the pane is NOT running one of the excluded commands.
@@ -3005,12 +3301,39 @@ func matchesPromptPrefix(line, readyPromptPrefix string) bool {
 	return strings.HasPrefix(trimmed, normalizedPrefix) || (prefix != "" && trimmed == prefix)
 }
 
+// busyIndicators is the single source of truth for the substrings an agent TUI
+// renders in its status bar while actively generating. Detection of "is the
+// agent working?" scrapes the pane for any of these (see hasBusyIndicator), and
+// that signal underpins IsIdle, WaitForIdle, and the nudge Escape-suppression in
+// shouldSendEscape. Claude Code, Codex, and Gemini all surface "esc to
+// interrupt"; if an agent uses different wording, add it here — that is the only
+// place that needs to change.
+//
+// FRAGILITY (gastownhall/gastown#4240): this couples to upstream TUI status
+// text. Scraping the status bar cannot detect a silent upstream rename on its
+// own — a truly structural readiness signal would, but none is available across
+// all agents today. Centralizing the markers here keeps any required update to a
+// single reviewable line, and TestBusyIndicators pins the known marker so a
+// change is intentional rather than accidental. The idle side is already
+// centralized via the agent presets' ReadyPromptPrefix; this is its busy-side
+// counterpart.
+var busyIndicators = []string{"esc to interrupt"}
+
 func hasBusyIndicator(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return false
 	}
-	return strings.Contains(trimmed, "esc to interrupt")
+	for _, marker := range busyIndicators {
+		marker = strings.TrimSpace(marker)
+		if marker == "" {
+			continue
+		}
+		if strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // shouldSendEscapeForLines reports whether the vim-mode Escape keystroke

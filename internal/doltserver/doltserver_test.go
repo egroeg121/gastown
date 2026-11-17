@@ -3905,6 +3905,7 @@ func TestDefaultConfig_EnvVarPartialOverride(t *testing.T) {
 
 	// Only override host, rest should keep defaults
 	t.Setenv("GT_DOLT_HOST", "remote.host")
+	t.Setenv("GT_DOLT_PORT", "")
 
 	config := DefaultConfig(townRoot)
 
@@ -3935,22 +3936,28 @@ func TestDefaultConfig_InvalidPortIgnored(t *testing.T) {
 
 func TestDefaultConfig_ConfigYAMLBeatsDaemonJSON(t *testing.T) {
 	townRoot := t.TempDir()
+	t.Setenv("GT_DOLT_IGNORE_CONFIG", "")
+	t.Setenv("GT_DOLT_HOST", "")
+	t.Setenv("GT_DOLT_PORT", "")
 	dataDir := filepath.Join(townRoot, ".dolt-data")
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dataDir, "config.yaml"), []byte("listener:\n  port: 4407\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dataDir, "config.yaml"), []byte("listener:\n  host: 127.0.0.2\n  port: 4407\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	mayorDir := filepath.Join(townRoot, "mayor")
 	if err := os.MkdirAll(mayorDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(mayorDir, "daemon.json"), []byte(`{"env":{"GT_DOLT_PORT":"5507"}}`), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(mayorDir, "daemon.json"), []byte(`{"env":{"GT_DOLT_HOST":"127.0.0.3","GT_DOLT_PORT":"5507"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 
 	config := DefaultConfig(townRoot)
+	if config.Host != "127.0.0.2" {
+		t.Errorf("Host = %q, want config.yaml host 127.0.0.2", config.Host)
+	}
 	if config.Port != 4407 {
 		t.Errorf("Port = %d, want config.yaml port 4407", config.Port)
 	}
@@ -3993,6 +4000,10 @@ func TestDefaultConfig_IgnoreConfigUsesEnvPort(t *testing.T) {
 
 func TestDefaultConfig_ManagedDefaultsAndEnvOverrides(t *testing.T) {
 	townRoot := t.TempDir()
+	t.Setenv("GT_DOLT_PORT", "")
+	unsetEnv(t, "GT_DOLT_STATS_ENABLED")
+	unsetEnv(t, "GT_DOLT_EVENT_SCHEDULER")
+	unsetEnv(t, "GT_DOLT_AUTO_GC")
 
 	config := DefaultConfig(townRoot)
 	if config.EventScheduler != "OFF" {
@@ -4001,15 +4012,22 @@ func TestDefaultConfig_ManagedDefaultsAndEnvOverrides(t *testing.T) {
 	if config.DoltStatsEnabled != "0" {
 		t.Errorf("DoltStatsEnabled = %q, want 0", config.DoltStatsEnabled)
 	}
+	if config.AutoGC != "on" {
+		t.Errorf("AutoGC = %q, want on", config.AutoGC)
+	}
 
 	t.Setenv("GT_DOLT_STATS_ENABLED", "omit")
 	t.Setenv("GT_DOLT_EVENT_SCHEDULER", "omit")
+	t.Setenv("GT_DOLT_AUTO_GC", "off")
 	config = DefaultConfig(townRoot)
 	if config.DoltStatsEnabled != "omit" {
 		t.Errorf("DoltStatsEnabled = %q, want omit", config.DoltStatsEnabled)
 	}
 	if config.EventScheduler != "omit" {
 		t.Errorf("EventScheduler = %q, want omit", config.EventScheduler)
+	}
+	if config.AutoGC != "off" {
+		t.Errorf("AutoGC = %q, want off", config.AutoGC)
 	}
 }
 
@@ -4514,14 +4532,58 @@ func TestWriteServerConfig_Defaults(t *testing.T) {
 	if parsed.Behavior.EventScheduler == nil || *parsed.Behavior.EventScheduler != "OFF" {
 		t.Fatalf("behavior.event_scheduler = %v, want OFF", parsed.Behavior.EventScheduler)
 	}
-	if parsed.Behavior.AutoGCBehavior.Enable {
-		t.Error("behavior.auto_gc_behavior.enable = true, want false")
+	if !parsed.Behavior.AutoGCBehavior.Enable {
+		t.Error("behavior.auto_gc_behavior.enable = false, want true (non-blocking auto_gc re-enabled, hq-excy9g)")
 	}
-	if parsed.Behavior.AutoGCBehavior.ArchiveLevel != 0 {
-		t.Errorf("behavior.auto_gc_behavior.archive_level = %d, want 0", parsed.Behavior.AutoGCBehavior.ArchiveLevel)
+	if parsed.Behavior.AutoGCBehavior.ArchiveLevel != 1 {
+		t.Errorf("behavior.auto_gc_behavior.archive_level = %d, want 1", parsed.Behavior.AutoGCBehavior.ArchiveLevel)
 	}
 	if parsed.SystemVariables.DoltStatsEnabled == nil || *parsed.SystemVariables.DoltStatsEnabled != 0 {
 		t.Fatalf("system_variables.dolt_stats_enabled = %v, want 0", parsed.SystemVariables.DoltStatsEnabled)
+	}
+}
+
+// TestWriteServerConfig_AutoGCDisabled verifies the GT_DOLT_AUTO_GC kill-switch:
+// AutoGC="off" emits auto_gc_behavior {enable:false, archive_level:0} so auto_gc can
+// be disabled at runtime without a source revert+rebuild (hq-excy9g escape hatch).
+func TestWriteServerConfig_AutoGCDisabled(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	config := &Config{
+		Port:           3307,
+		DataDir:        dir,
+		MaxConnections: 1000,
+		ReadTimeoutMs:  DefaultReadTimeoutMs,
+		WriteTimeoutMs: DefaultWriteTimeoutMs,
+		LogLevel:       "warning",
+		AutoGC:         "off",
+	}
+
+	if err := writeServerConfig(config, configPath); err != nil {
+		t.Fatalf("writeServerConfig: %v", err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+
+	var parsed struct {
+		Behavior struct {
+			AutoGCBehavior struct {
+				Enable       bool `yaml:"enable"`
+				ArchiveLevel int  `yaml:"archive_level"`
+			} `yaml:"auto_gc_behavior"`
+		} `yaml:"behavior"`
+	}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("generated config is invalid YAML: %v\n%s", err, data)
+	}
+	if parsed.Behavior.AutoGCBehavior.Enable {
+		t.Error("AutoGC=off: auto_gc_behavior.enable = true, want false")
+	}
+	if parsed.Behavior.AutoGCBehavior.ArchiveLevel != 0 {
+		t.Errorf("AutoGC=off: archive_level = %d, want 0", parsed.Behavior.AutoGCBehavior.ArchiveLevel)
 	}
 }
 

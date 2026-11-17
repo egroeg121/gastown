@@ -874,45 +874,41 @@ func TestConfigSetGet(t *testing.T) {
 	})
 }
 
-func TestConfigGetSchedulerMaxPolecatsAnnotation(t *testing.T) {
-	cases := []struct {
-		name  string
-		value string
-		want  string
-	}{
-		{"default direct dispatch", "", "[deferred dispatch: OFF]"},
-		{"explicit -1", "-1", "[deferred dispatch: OFF]"},
-		{"zero", "0", "[deferred dispatch: OFF]"},
-		{"deferred", "5", "[deferred dispatch: ON — set to -1 to disable]"},
+func TestSchedulerConfigSetZero(t *testing.T) {
+	townRoot := setupTestTownForConfig(t)
+	settingsPath := config.TownSettingsPath(townRoot)
+
+	originalWd, _ := os.Getwd()
+	defer os.Chdir(originalWd)
+	if err := os.Chdir(townRoot); err != nil {
+		t.Fatalf("chdir: %v", err)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			townRoot := setupTestTownForConfig(t)
+	cmd := &cobra.Command{}
+	if err := runConfigSet(cmd, []string{"scheduler.max_polecats", "0"}); err != nil {
+		t.Fatalf("runConfigSet failed: %v", err)
+	}
 
-			originalWd, _ := os.Getwd()
-			defer os.Chdir(originalWd)
-			if err := os.Chdir(townRoot); err != nil {
-				t.Fatalf("chdir: %v", err)
-			}
+	loaded, err := config.LoadOrCreateTownSettings(settingsPath)
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if loaded.Scheduler == nil || loaded.Scheduler.MaxPolecats == nil {
+		t.Fatal("scheduler.max_polecats was not persisted")
+	}
+	if got := loaded.Scheduler.GetMaxPolecats(); got != 0 {
+		t.Fatalf("persisted scheduler.max_polecats = %d, want 0", got)
+	}
 
-			cmd := &cobra.Command{}
-			if tc.value != "" {
-				if err := runConfigSet(cmd, []string{"scheduler.max_polecats", tc.value}); err != nil {
-					t.Fatalf("runConfigSet: %v", err)
-				}
-			}
-
-			out := captureStdout(t, func() {
-				if err := runConfigGet(cmd, []string{"scheduler.max_polecats"}); err != nil {
-					t.Fatalf("runConfigGet: %v", err)
-				}
-			})
-
-			if !strings.Contains(out, tc.want) {
-				t.Errorf("output %q missing annotation %q", out, tc.want)
-			}
-		})
+	var getErr error
+	out := captureStdout(t, func() {
+		getErr = runConfigGet(cmd, []string{"scheduler.max_polecats"})
+	})
+	if getErr != nil {
+		t.Fatalf("runConfigGet failed: %v", getErr)
+	}
+	if strings.TrimSpace(out) != "0" {
+		t.Fatalf("config get scheduler.max_polecats = %q, want 0", strings.TrimSpace(out))
 	}
 }
 

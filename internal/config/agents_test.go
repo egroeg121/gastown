@@ -32,7 +32,7 @@ func TestBuiltInAgentPresetSummary(t *testing.T) {
 func TestBuiltinPresets(t *testing.T) {
 	t.Parallel()
 	// Ensure all built-in presets are accessible
-	presets := []AgentPreset{AgentClaude, AgentGemini, AgentCodex, AgentCursor, AgentAuggie, AgentAmp, AgentOpenCode, AgentCopilot, AgentPi, AgentOmp}
+	presets := []AgentPreset{AgentClaude, AgentGemini, AgentCodex, AgentKiro, AgentCursor, AgentAuggie, AgentAmp, AgentOpenCode, AgentCopilot, AgentPi, AgentOmp}
 
 	for _, preset := range presets {
 		info := GetAgentPreset(preset)
@@ -62,6 +62,7 @@ func TestGetAgentPresetByName(t *testing.T) {
 		{"claude", AgentClaude, false},
 		{"gemini", AgentGemini, false},
 		{"codex", AgentCodex, false},
+		{"kiro", AgentKiro, false},
 		{"cursor", AgentCursor, false},
 		{"auggie", AgentAuggie, false},
 		{"amp", AgentAmp, false},
@@ -98,6 +99,7 @@ func TestRuntimeConfigFromPreset(t *testing.T) {
 		{AgentClaude, "claude"}, // Note: claude may resolve to full path
 		{AgentGemini, "gemini"},
 		{AgentCodex, "codex"},
+		{AgentKiro, "kiro-cli"},
 		{AgentCursor, "cursor-agent"},
 		{AgentAuggie, "auggie"},
 		{AgentAmp, "amp"},
@@ -167,6 +169,8 @@ func TestIsKnownPreset(t *testing.T) {
 }
 
 func TestLoadAgentRegistry(t *testing.T) {
+	isolateAgentRegistry(t)
+
 	// Create temp directory for test config
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "agents.json")
@@ -192,9 +196,6 @@ func TestLoadAgentRegistry(t *testing.T) {
 		t.Fatalf("failed to write test config: %v", err)
 	}
 
-	// Reset global registry for test isolation
-	ResetRegistryForTesting()
-
 	// Load should succeed
 	if err := LoadAgentRegistry(configPath); err != nil {
 		t.Fatalf("LoadAgentRegistry failed: %v", err)
@@ -215,9 +216,6 @@ func TestLoadAgentRegistry(t *testing.T) {
 	if claude == nil {
 		t.Fatal("built-in 'claude' not found after loading registry")
 	}
-
-	// Reset for other tests
-	ResetRegistryForTesting()
 }
 
 func TestGetProcessNamesRespectsRegistryOverride(t *testing.T) {
@@ -225,8 +223,7 @@ func TestGetProcessNamesRespectsRegistryOverride(t *testing.T) {
 	// GetProcessNames so that liveness checks (IsAgentAlive, daemon heartbeat,
 	// cleanup) respect user-configured process names.
 	// Real-world case: NixOS wraps claude as ".claude-unwrapped".
-	ResetRegistryForTesting()
-	t.Cleanup(ResetRegistryForTesting)
+	isolateAgentRegistry(t)
 
 	// Before loading any registry, GetProcessNames returns the builtin default.
 	builtinNames := GetProcessNames("claude")
@@ -276,9 +273,8 @@ func TestGetProcessNamesRespectsRegistryOverride(t *testing.T) {
 }
 
 func TestResolveProcessNames(t *testing.T) {
-	t.Parallel()
-	ResetRegistryForTesting()
-	t.Cleanup(ResetRegistryForTesting)
+	// Not parallel: subtests register custom presets in the global registry.
+	isolateAgentRegistry(t)
 
 	tests := []struct {
 		name      string
@@ -634,6 +630,13 @@ func TestBuildResumeCommand(t *testing.T) {
 			contains:  []string{"codex", "resume", "codex-sess-789", "--dangerously-bypass-approvals-and-sandbox"},
 		},
 		{
+			name:      "kiro flag style",
+			agentName: "kiro",
+			sessionID: "f2946a26-3735-4b08-8d05-c928010302d5",
+			wantEmpty: false,
+			contains:  []string{"kiro-cli", "chat", "--trust-all-tools", "--resume-id", "f2946a26-3735-4b08-8d05-c928010302d5"},
+		},
+		{
 			name:      "empty session ID",
 			agentName: "claude",
 			sessionID: "",
@@ -683,6 +686,7 @@ func TestSupportsSessionResume(t *testing.T) {
 		{"claude", true},
 		{"gemini", true},
 		{"codex", true},
+		{"kiro", true},
 		{"cursor", true},
 		{"auggie", true},
 		{"amp", true},
@@ -708,6 +712,7 @@ func TestGetSessionIDEnvVar(t *testing.T) {
 		{"claude", "CLAUDE_SESSION_ID"},
 		{"gemini", "GEMINI_SESSION_ID"},
 		{"codex", ""},   // Codex uses JSONL output instead
+		{"kiro", ""},    // Kiro stores sessions per directory and resumes by CLI flag
 		{"cursor", ""},  // Cursor uses --resume with chatId directly
 		{"auggie", ""},  // Auggie uses --resume directly
 		{"amp", ""},     // AMP uses 'threads continue' subcommand
@@ -733,6 +738,7 @@ func TestGetProcessNames(t *testing.T) {
 		{"claude", []string{"node", "claude"}},
 		{"gemini", []string{"gemini"}},
 		{"codex", []string{"codex"}},
+		{"kiro", []string{"kiro-cli"}},
 		{"cursor", []string{"cursor-agent", "agent"}},
 		{"auggie", []string{"auggie"}},
 		{"amp", []string{"amp"}},
@@ -912,6 +918,59 @@ func TestCursorAgentPreset(t *testing.T) {
 	}
 }
 
+func TestKiroAgentPreset(t *testing.T) {
+	t.Parallel()
+
+	info := GetAgentPreset(AgentKiro)
+	if info == nil {
+		t.Fatal("kiro preset not found")
+	}
+
+	if info.Command != "kiro-cli" {
+		t.Errorf("kiro Command = %q, want kiro-cli", info.Command)
+	}
+	wantArgs := []string{"chat", "--trust-all-tools"}
+	if len(info.Args) != len(wantArgs) {
+		t.Fatalf("kiro Args = %v, want %v", info.Args, wantArgs)
+	}
+	for i, want := range wantArgs {
+		if info.Args[i] != want {
+			t.Errorf("kiro Args[%d] = %q, want %q", i, info.Args[i], want)
+		}
+	}
+
+	if len(info.ProcessNames) != 1 || info.ProcessNames[0] != "kiro-cli" {
+		t.Errorf("kiro ProcessNames = %v, want [kiro-cli]", info.ProcessNames)
+	}
+	if info.SessionIDEnv != "" {
+		t.Errorf("kiro SessionIDEnv = %q, want empty", info.SessionIDEnv)
+	}
+	if info.ResumeFlag != "--resume-id" {
+		t.Errorf("kiro ResumeFlag = %q, want --resume-id", info.ResumeFlag)
+	}
+	if info.ContinueFlag != "--resume" {
+		t.Errorf("kiro ContinueFlag = %q, want --resume", info.ContinueFlag)
+	}
+	if info.ResumeStyle != "flag" {
+		t.Errorf("kiro ResumeStyle = %q, want flag", info.ResumeStyle)
+	}
+	if info.SupportsHooks {
+		t.Error("kiro SupportsHooks should remain false until Gas Town has a Kiro hook adapter")
+	}
+	if info.SupportsForkSession {
+		t.Error("kiro should not support fork session")
+	}
+	if info.NonInteractive != nil {
+		t.Errorf("kiro NonInteractive = %+v, want nil until --no-interactive positional prompts are modeled", info.NonInteractive)
+	}
+	if info.ReadyDelayMs != 5000 {
+		t.Errorf("kiro ReadyDelayMs = %d, want 5000", info.ReadyDelayMs)
+	}
+	if info.InstructionsFile != "AGENTS.md" {
+		t.Errorf("kiro InstructionsFile = %q, want AGENTS.md", info.InstructionsFile)
+	}
+}
+
 // TestDefaultRigAgentRegistryPath verifies that the default rig agent registry path is constructed correctly.
 func TestDefaultRigAgentRegistryPath(t *testing.T) {
 	t.Parallel()
@@ -937,9 +996,7 @@ func TestDefaultRigAgentRegistryPath(t *testing.T) {
 
 // TestLoadRigAgentRegistry verifies that rig-level agent registry is loaded correctly.
 func TestLoadRigAgentRegistry(t *testing.T) {
-	// Reset registry for test isolation
-	ResetRegistryForTesting()
-	t.Cleanup(ResetRegistryForTesting)
+	isolateAgentRegistry(t)
 
 	tmpDir := t.TempDir()
 	registryPath := filepath.Join(tmpDir, "settings", "agents.json")
@@ -1451,8 +1508,6 @@ func TestAllHookSupportingAgentsHaveHookFields(t *testing.T) {
 
 func TestResolveACPConfig(t *testing.T) {
 	t.Parallel()
-	ResetRegistryForTesting()
-	t.Cleanup(ResetRegistryForTesting)
 
 	tests := []struct {
 		name      string
@@ -1512,8 +1567,7 @@ func TestResolveACPConfig(t *testing.T) {
 }
 
 func TestSupportsACPWithCustomAgent(t *testing.T) {
-	ResetRegistryForTesting()
-	t.Cleanup(ResetRegistryForTesting)
+	isolateAgentRegistry(t)
 
 	// Register a custom agent that uses 'opencode' command but doesn't have ACP config
 	RegisterAgentForTesting("custom-model", AgentPresetInfo{
@@ -1536,8 +1590,6 @@ func TestSupportsACPWithCustomAgent(t *testing.T) {
 
 func TestGetACPCommand(t *testing.T) {
 	t.Parallel()
-	ResetRegistryForTesting()
-	t.Cleanup(ResetRegistryForTesting)
 
 	tests := []struct {
 		agentName string
@@ -1566,8 +1618,7 @@ func TestGetACPCommand(t *testing.T) {
 }
 
 func TestACPConfig(t *testing.T) {
-	ResetRegistryForTesting()
-	t.Cleanup(ResetRegistryForTesting)
+	isolateAgentRegistry(t)
 
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "agents.json")
@@ -1633,8 +1684,7 @@ func TestACPConfig(t *testing.T) {
 // - Subcommand mode: Agent has ACP as a subcommand
 // - Flag mode: Agent uses flags to enable ACP
 func TestACPModes(t *testing.T) {
-	ResetRegistryForTesting()
-	t.Cleanup(ResetRegistryForTesting)
+	isolateAgentRegistry(t)
 
 	tests := []struct {
 		name     string
